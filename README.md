@@ -2,6 +2,10 @@
 
 Native tkinter agent wall: one tile per live tmux session.
 
+**tmux is a must** — sessions only get a tty tile if they run inside tmux
+(`capture-pane` is the feed). Anything launched outside tmux is invisible
+to the wall.
+
 ```bash
 # inside WSL
 cd agent-pip
