@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, StrokeKind, Vec2};
 
-const POLL_SECONDS: u64 = 60;
+const POLL_SECONDS: u64 = 120;
 const PANE_LINES: i32 = 30;
 
 const TILE_W: f32 = 220.0;
@@ -29,6 +29,22 @@ const MUTED: Color32 = Color32::from_rgb(0x8b, 0x95, 0xab);
 const ATTACHED: Color32 = Color32::from_rgb(0x3e, 0xe0, 0x8b);
 const BORDER: Color32 = Color32::from_rgb(0x23, 0x2a, 0x38);
 
+// CREATE_NO_WINDOW: background polling/kill commands must not flash a
+// console; wt.exe in launch_tp is user-initiated and stays visible.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
+fn no_window(cmd: &mut Command) -> &mut Command {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW)
+}
+
+#[cfg(not(windows))]
+fn no_window(cmd: &mut Command) -> &mut Command {
+    cmd
+}
+
 // wsl.exe -e (exec), not --: `--` pipes the command through the default
 // shell, which expands a literal "$0" session-id argument to its own $0.
 fn tmux_base() -> Vec<&'static str> {
@@ -41,12 +57,9 @@ fn tmux_base() -> Vec<&'static str> {
 
 fn tmux(args: &[&str]) -> Option<String> {
     let base = tmux_base();
-    let out = Command::new(base[0])
-        .args(&base[1..])
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(base[0]);
+    cmd.args(&base[1..]).args(args).stdin(Stdio::null());
+    let out = no_window(&mut cmd).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -222,12 +235,13 @@ impl Wall {
         }
         if resp.secondary_clicked() {
             let base = tmux_base();
-            let _ = Command::new(base[0])
-                .args(&base[1..])
+            let mut cmd = Command::new(base[0]);
+            cmd.args(&base[1..])
                 .args(["kill-session", "-t", &meta.name])
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
+                .stderr(Stdio::null());
+            let _ = no_window(&mut cmd).spawn();
             self.status = format!("killed {}", meta.name);
             self.panes.remove(&meta.name);
             self.sessions.retain(|m| m.name != meta.name);
