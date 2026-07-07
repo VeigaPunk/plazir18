@@ -1,38 +1,34 @@
 # agent-pip
 
-Native tkinter agent wall: one tile per live tmux session.
+Native Windows agent wall in Rust (eframe/egui): one tile per live tmux
+session, crisp DPI-aware rendering, always-on-top.
 
-**tmux is a must** — sessions only get a tty tile if they run inside tmux
+**tmux is a must** — sessions only get a tile if they run inside tmux
 (`capture-pane` is the feed). Anything launched outside tmux is invisible
 to the wall.
 
+## Build & deploy
+
 ```bash
-# inside WSL
-cd agent-pip
-python3 wall.py
+# inside WSL — cross-compiles to Windows and installs into shell:startup
+./deploy.sh
 ```
 
-```powershell
-# on Windows directly (better rendering than WSLg)
-python.exe \\wsl.localhost\Ubuntu-24.04\home\vhpnk\repos\agent-pip\wall.py
-```
+The exe lands in the Windows Startup folder, so it runs at logon and can
+be double-clicked for a manual launch. A second launch exits silently
+(single-instance guard).
 
-**Interactions:**
-- **left-click** a tile → attach a terminal to that session
+## Interactions
+
+Mouse-only:
+- **left-click** a tile → attach a Windows Terminal to that session
 - **right-click** a tile → kill it
 
-## Autostart
+Flags: `--no-top` disables always-on-top.
+
+## Dev (Linux)
 
 ```bash
-# ~/.bashrc
-pgrep -f "python3 .*agent-pip/wall.py" >/dev/null || \
-  (DISPLAY=:0 python3 ~/repos/agent-pip/wall.py &) 2>/dev/null
-```
-
-```toml
-[[app]]
-name = "agent-wall"
-command = "python3"
-args = ["/home/vhpnk/repos/agent-pip/wall.py"]
-env = { DISPLAY = ":0" }
+cargo test           # parser unit tests
+cargo run            # runs against local tmux directly (no wsl.exe hop)
 ```
