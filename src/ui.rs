@@ -13,7 +13,7 @@ use crate::AppMsg;
 use crate::ipc::IpcCmd;
 use crate::persist::WinState;
 use crate::theme::{
-    grid_cols, BG, GAP, MAX_CONCURRENT, MUTED, PAD, PANEL_H, PANEL_W, STRIP_TILE_H, WIN_H,
+    BG, GAP, MAX_CONCURRENT, MUTED, PAD, PANEL_H, PANEL_W, STRIP_TILE_H, WIN_H, grid_cols,
 };
 use crate::tmux::Meta;
 
@@ -154,11 +154,7 @@ impl Wall {
                             }
                         }
                     }
-                    ui.label(
-                        egui::RichText::new(&self.status)
-                            .color(MUTED)
-                            .size(9.0),
-                    );
+                    ui.label(egui::RichText::new(&self.status).color(MUTED).size(9.0));
                 });
             });
         let _ = STRIP_TILE_H; // keep import used if layout toggles
@@ -171,11 +167,7 @@ impl Wall {
         to_kill: &mut Vec<String>,
     ) {
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(&self.status)
-                    .color(MUTED)
-                    .size(11.0),
-            );
+            ui.label(egui::RichText::new(&self.status).color(MUTED).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(format!("max {MAX_CONCURRENT}"))

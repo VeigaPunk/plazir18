@@ -5,8 +5,8 @@ use std::time::Instant;
 use eframe::egui::{self, Align2, FontId, PointerButton, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::theme::{
-    ATTACHED, BORDER, CARD, MUTED, PAD, PANEL_H, PANEL_TAIL_LINES, PANEL_TITLE_H, PANEL_W, STRIP_TILE_H,
-    STRIP_W, TEXT, TITLE_BAR, TP_DEBOUNCE,
+    ATTACHED, BORDER, CARD, MUTED, PAD, PANEL_H, PANEL_TAIL_LINES, PANEL_TITLE_H, PANEL_W,
+    STRIP_TILE_H, STRIP_W, TEXT, TITLE_BAR, TP_DEBOUNCE,
 };
 use crate::tmux::Meta;
 use crate::ui::Wall;
@@ -40,11 +40,7 @@ impl Wall {
         if multi_line {
             let title = Rect::from_min_size(rect.min, Vec2::new(rect.width(), PANEL_TITLE_H));
             painter.rect_filled(title, 0.0, TITLE_BAR);
-            painter.hline(
-                title.x_range(),
-                title.max.y,
-                Stroke::new(1.0, BORDER),
-            );
+            painter.hline(title.x_range(), title.max.y, Stroke::new(1.0, BORDER));
 
             let dot = title.left_center() + Vec2::new(PAD, 0.0);
             if meta.attached {
