@@ -1,13 +1,27 @@
-# agent-pip
+# agent-pip (agent-wall)
 
-Agent wall in Rust (eframe/egui): one tile per live tmux session, arranged as
-a full-width top strip with crisp DPI-aware rendering and always-on-top behavior.
-
-This repo supports Linux desktops (including Omarchy) for local tmux usage.
+Multi-panel agent terminal dashboard in Rust (eframe/egui): one **panel per live
+tmux session**, up to **24 concurrent** tiles in a grid. Live pane tails,
+DPI-aware rendering, always-on-top optional.
 
 **tmux is a must** — sessions only get a tile if they run inside tmux
 (`capture-pane` is the feed). Anything launched outside tmux is invisible
 to the wall.
+
+## Layout
+
+**Default: multi-panel grid** (dashboard of terminals)
+
+- Up to **24** concurrent panels (hard ceiling; no soft nudge below that).
+- Adaptive columns: 1 / 2 / 3 / 4 / 6 cols by count.
+- Each panel: title + attach dot + last ~10 non-empty pane lines.
+- Left-click → attach in terminal · right-click → kill.
+
+**Legacy strip** (top bar of compact rows):
+
+```bash
+cargo run -- --strip
+```
 
 ## Linux: clone, build, and run
 
@@ -20,6 +34,15 @@ cargo run
 `TERMINAL` (if set) is used as primary launcher for left-click attach; otherwise
 the app falls back to `alacritty`, `kitty`, `foot`, and `xterm`.
 
+## Flags
+
+| Flag | Effect |
+|------|--------|
+| *(none)* | Multi-panel dashboard, max 24 tiles |
+| `--strip` | Legacy horizontal strip |
+| `--no-top` | Disable always-on-top |
+| `--toggle` | Reveal/hide running instance (Hyprland special workspace or IPC) |
+
 ## Build & deploy (Windows)
 
 ```bash
@@ -27,25 +50,12 @@ the app falls back to `alacritty`, `kitty`, `foot`, and `xterm`.
 ./deploy.sh
 ```
 
-The exe lands in the Windows Startup folder, so it runs at logon and can
-be double-clicked for a manual launch. A second launch exits silently
-(single-instance guard).
-
-## Interactions
-
-Mouse-only:
-- **left-click** a tile → open a terminal and attach to that session
-- **right-click** a tile → kill it
-
-Flags: `--no-top` disables always-on-top.
-
-On Hyprland, place the window on a named special workspace and bind
-`agent-wall --toggle` to a key. The default bar geometry is 3440×58 for the
-DP-1 ultrawide; each agent tile remains 220×28.
-
-## Dev (Linux)
+## Dev
 
 ```bash
-cargo test           # parser unit tests
-cargo run            # runs against local tmux directly (no wsl.exe hop)
+cargo test
+cargo run              # multi-panel
+cargo run -- --strip   # strip mode
 ```
+
+Homepage / marketplace brand: https://ds4cc.com/

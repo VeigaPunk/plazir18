@@ -18,10 +18,14 @@ mod ui;
 mod wake;
 
 use persist::WinState;
-use ui::Wall;
+use theme::{GAP, MAX_CONCURRENT, PAD, PANEL_H, PANEL_W};
+use ui::{LayoutMode, Wall};
 
-const WIN_W: f32 = 3440.0;
-const WIN_H: f32 = 58.0;
+/// Legacy full-width strip defaults.
+const STRIP_WIN_W: f32 = 3440.0;
+const STRIP_WIN_H: f32 = 58.0;
+/// Multi-panel dashboard default height (width is computed from 6-col grid).
+const PANEL_WIN_H: f32 = 720.0;
 
 pub enum AppMsg {
     Sessions(Vec<tmux::Meta>),
@@ -49,8 +53,17 @@ fn main() -> eframe::Result<()> {
 
     let win_state = WinState::load().unwrap_or_default();
 
+    // Default: multi-panel terminal grid (up to MAX_CONCURRENT).
+    // `--strip` restores the legacy top-bar strip layout.
+    let layout = if std::env::args().any(|a| a == "--strip") {
+        LayoutMode::Strip
+    } else {
+        LayoutMode::Panel
+    };
+
     // Bounded channel: poller drops updates when the UI is behind.
-    let (tx, rx) = mpsc::sync_channel::<AppMsg>(32);
+    // Sized for up to MAX_CONCURRENT pane updates + session list.
+    let (tx, rx) = mpsc::sync_channel::<AppMsg>(MAX_CONCURRENT * 2 + 8);
 
     // Wake channel: one sender in the FIFO reader (real tmux activity), one in
     // the UI (kill / reveal). The poller owns the receiver.
@@ -71,15 +84,29 @@ fn main() -> eframe::Result<()> {
         height: 32,
     };
 
+    let default_w = match layout {
+        LayoutMode::Strip => STRIP_WIN_W,
+        LayoutMode::Panel => {
+            // 6 columns × panel + gaps + pad, enough for 24 tiles in a 6×4 grid.
+            let cols = 6.0_f32;
+            PAD * 2.0 + cols * PANEL_W + (cols - 1.0) * GAP
+        }
+    };
+    let default_h = match layout {
+        LayoutMode::Strip => STRIP_WIN_H,
+        LayoutMode::Panel => PANEL_WIN_H,
+    };
+    let _ = PANEL_H; // used by layout sizing docs / future auto-fit
+
     let w = if win_state.w > 0 {
         win_state.w as f32
     } else {
-        WIN_W
+        default_w
     };
     let h = if win_state.h > 0 {
         win_state.h as f32
     } else {
-        WIN_H
+        default_h
     };
 
     let mut viewport = egui::ViewportBuilder::default()
@@ -123,6 +150,7 @@ fn main() -> eframe::Result<()> {
                 win_state,
                 wake_tx,
                 visible,
+                layout,
             )))
         }),
     )
