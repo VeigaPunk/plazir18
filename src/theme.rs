@@ -10,7 +10,7 @@ pub const MUTED: Color32 = Color32::from_rgb(0x8b, 0x95, 0xab);
 pub const ATTACHED: Color32 = Color32::from_rgb(0x3e, 0xe0, 0x8b);
 pub const BORDER: Color32 = Color32::from_rgb(0x23, 0x2a, 0x38);
 
-pub const WIN_H: f32 = 194.0;
+pub const WIN_H: f32 = 58.0;
 pub const STRIP_TILE_H: f32 = 28.0;
 pub const STRIP_W: f32 = 220.0;
 pub const GAP: f32 = 4.0;

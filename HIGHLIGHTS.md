@@ -2,12 +2,12 @@
 
 ## What it looks like
 
-Default window is 244×194 (code constant). The compositor persists user-resized
+Default window is a 3440×58 top strip. The compositor persists user-resized
 geometry in `~/.local/share/agent-wall/state.json`; the verified persisted state
 during this build run was **360×300 at (1540, 583)** on DP-1.
 
-The overlay is a dark navy (`#0b0e14`) panel with compact 220×28 rows,
-one per live tmux session. Each row shows:
+The overlay is a dark navy (`#0b0e14`) panel with compact 220×28 horizontal
+tiles, one per live tmux session. Each tile shows:
 
 - A green dot (`#3ee08b`) when a client is attached, hollow border otherwise.
 - Session name in 9 pt proportional pale blue-grey (`#c9d6e6`).

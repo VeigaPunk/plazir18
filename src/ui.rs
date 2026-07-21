@@ -139,32 +139,32 @@ impl eframe::App for Wall {
             .show(root, |ui| {
                 let mut to_kill: Vec<String> = Vec::new();
 
-                egui::ScrollArea::vertical()
-                    .max_height(WIN_H - PAD * 2.0 - 16.0)
+                egui::ScrollArea::horizontal()
+                    .max_height(WIN_H - PAD * 2.0)
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(0.0, GAP);
-                        if self.sessions.is_empty() {
-                            ui.label(
-                                egui::RichText::new(if self.seen_first_list {
-                                    "no tmux sessions"
-                                } else {
-                                    "starting…"
-                                })
-                                .color(MUTED)
-                                .size(9.0),
-                            );
-                        } else {
-                            let sessions = self.sessions.clone();
-                            for meta in &sessions {
-                                if let Some(id) = self.strip_tile(ui, meta) {
-                                    to_kill.push(id);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(GAP, 0.0);
+                            if self.sessions.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(if self.seen_first_list {
+                                        "no tmux sessions"
+                                    } else {
+                                        "starting…"
+                                    })
+                                    .color(MUTED)
+                                    .size(9.0),
+                                );
+                            } else {
+                                let sessions = self.sessions.clone();
+                                for meta in &sessions {
+                                    if let Some(id) = self.strip_tile(ui, meta) {
+                                        to_kill.push(id);
+                                    }
                                 }
                             }
-                        }
+                            ui.label(egui::RichText::new(&self.status).color(MUTED).size(9.0));
+                        });
                     });
-
-                ui.add_space(2.0);
-                ui.label(egui::RichText::new(&self.status).color(MUTED).size(9.0));
 
                 // Process deferred kills after iteration.
                 if !to_kill.is_empty() {

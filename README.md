@@ -1,6 +1,7 @@
 # agent-pip
 
-Agent wall in Rust (eframe/egui): one tile per live tmux session, crisp DPI-aware rendering, always-on-top.
+Agent wall in Rust (eframe/egui): one tile per live tmux session, arranged as
+a full-width top strip with crisp DPI-aware rendering and always-on-top behavior.
 
 This repo supports Linux desktops (including Omarchy) for local tmux usage.
 
@@ -37,6 +38,10 @@ Mouse-only:
 - **right-click** a tile → kill it
 
 Flags: `--no-top` disables always-on-top.
+
+On Hyprland, place the window on a named special workspace and bind
+`agent-wall --toggle` to a key. The default bar geometry is 3440×58 for the
+DP-1 ultrawide; each agent tile remains 220×28.
 
 ## Dev (Linux)
 

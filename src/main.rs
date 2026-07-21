@@ -20,8 +20,8 @@ mod wake;
 use persist::WinState;
 use ui::Wall;
 
-const WIN_W: f32 = 244.0;
-const WIN_H: f32 = 194.0;
+const WIN_W: f32 = 3440.0;
+const WIN_H: f32 = 58.0;
 
 pub enum AppMsg {
     Sessions(Vec<tmux::Meta>),
