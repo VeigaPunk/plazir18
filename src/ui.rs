@@ -42,6 +42,7 @@ pub struct Wall {
     pub seen_first_list: bool,
     pub win_state: WinState,
     pub layout: LayoutMode,
+    cached_title: String,
 }
 
 impl Wall {
@@ -67,6 +68,7 @@ impl Wall {
             seen_first_list: false,
             win_state,
             layout,
+            cached_title: String::new(),
         }
     }
 
@@ -230,10 +232,11 @@ impl eframe::App for Wall {
         }
 
         let shown = self.sessions.len().min(MAX_CONCURRENT);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-            "Agent Wall — {shown}/{} · multi-panel",
-            self.sessions.len()
-        )));
+        let title = format!("Agent Wall — {shown}/{} · multi-panel", self.sessions.len());
+        if title != self.cached_title {
+            self.cached_title = title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
