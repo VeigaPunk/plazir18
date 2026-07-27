@@ -26,7 +26,7 @@ const TICK: Duration = Duration::from_millis(100);
 const REFRESH: Duration = Duration::from_millis(750);
 
 const WAYBAR_PANEL_COLS: u16 = 32;
-const WAYBAR_ROWS: u16 = 9;
+const WAYBAR_ROWS: u16 = 10;
 
 /// Column count for `n` panels. Wide-and-short beats tall-and-thin here: a
 /// terminal screen is ~80x24, so panels must stay wide enough to avoid
@@ -118,10 +118,50 @@ struct PaneView {
 /// and of [`PaneInfo`]'s field order. Feeding it a pane's real geometry is what
 /// makes wrapping land where the user actually sees it; a swap here renders
 /// plausible-looking garbage rather than failing loudly.
-fn decode(pane: &PaneInfo) -> vt100::Parser {
-    let mut parser = vt100::Parser::new(pane.rows.max(1), pane.cols.max(1), 0);
-    parser.process(&tmux::capture_pane_styled(&pane.pane_id));
+fn decode_capture(capture: &[u8], rows: u16, cols: u16) -> vt100::Parser {
+    let mut parser = vt100::Parser::new(rows.max(1), cols.max(1), 0);
+    parser.process(capture);
     parser
+}
+
+fn tail_parser(screen: &vt100::Screen, rows: u16) -> vt100::Parser {
+    let (_, cols) = screen.size();
+    let end = screen
+        .rows(0, cols)
+        .enumerate()
+        .fold(0, |end, (index, line)| {
+            if line.trim().is_empty() {
+                end
+            } else {
+                index + 1
+            }
+        });
+    let start = end.saturating_sub(usize::from(rows));
+    let mut parser = vt100::Parser::new(rows.max(1), cols.max(1), 0);
+    for (index, line) in screen
+        .rows_formatted(0, cols)
+        .enumerate()
+        .take(end)
+        .skip(start)
+    {
+        parser.process(&line);
+        if index + 1 < end {
+            parser.process(b"\r\n");
+        }
+    }
+    parser
+}
+
+fn decode(pane: &PaneInfo, rows: Option<u16>) -> vt100::Parser {
+    let parser = decode_capture(
+        &tmux::capture_pane_styled(&pane.pane_id),
+        pane.rows,
+        pane.cols,
+    );
+    match rows {
+        Some(rows) => tail_parser(parser.screen(), rows),
+        None => parser,
+    }
 }
 
 fn title_for(pane: &PaneInfo, session: Option<&tmux::Meta>, now: i64) -> String {
@@ -137,7 +177,7 @@ fn title_for(pane: &PaneInfo, session: Option<&tmux::Meta>, now: i64) -> String 
     )
 }
 
-fn snapshot(now: i64) -> Vec<PaneView> {
+fn snapshot(now: i64, rows: Option<u16>) -> Vec<PaneView> {
     let sessions = tmux::list_sessions();
     let by_name: HashMap<&str, &tmux::Meta> =
         sessions.iter().map(|s| (s.name.as_str(), s)).collect();
@@ -147,7 +187,7 @@ fn snapshot(now: i64) -> Vec<PaneView> {
         .map(|pane| {
             let session = by_name.get(pane.session_name.as_str()).copied();
             PaneView {
-                parser: decode(pane),
+                parser: decode(pane, rows),
                 title: title_for(pane, session, now),
                 attached: session.is_some_and(|s| s.attached),
             }
@@ -204,7 +244,7 @@ fn render_empty(area: Rect, buffer: &mut Buffer) {
 }
 
 pub fn render_waybar_to_buffer() -> Buffer {
-    let panes = snapshot(tmux::now_secs());
+    let panes = snapshot(tmux::now_secs(), Some(WAYBAR_ROWS.saturating_sub(2)));
     let pane_count = u16::try_from(panes.len()).unwrap_or(u16::MAX);
     let width = WAYBAR_PANEL_COLS.saturating_mul(pane_count.max(1));
     let area = Rect::new(0, 0, width, WAYBAR_ROWS);
@@ -235,10 +275,14 @@ fn compact_panel_rows(buffer: &mut Buffer, panels: &[Rect]) {
                     .collect()
             })
             .collect();
+        let empty_rows = usize::from(panel.height - 2).saturating_sub(rows.len());
 
         for (offset, y) in (panel.y + 1..panel.bottom() - 1).enumerate() {
             for (column, x) in (panel.x + 1..panel.right() - 1).enumerate() {
-                if let Some(row) = rows.get(offset) {
+                if let Some(row) = offset
+                    .checked_sub(empty_rows)
+                    .and_then(|index| rows.get(index))
+                {
                     buffer[(x, y)] = row[column].clone();
                 } else {
                     buffer[(x, y)].reset();
@@ -441,7 +485,7 @@ fn install_panic_hook() {
 }
 
 fn event_loop(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
-    let mut panes = snapshot(tmux::now_secs());
+    let mut panes = snapshot(tmux::now_secs(), None);
     let mut refreshed = Instant::now();
     let mut forced = false;
 
@@ -459,7 +503,7 @@ fn event_loop(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         }
 
         if std::mem::take(&mut forced) || refreshed.elapsed() >= REFRESH {
-            panes = snapshot(tmux::now_secs());
+            panes = snapshot(tmux::now_secs(), None);
             refreshed = Instant::now();
         }
     }
@@ -598,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn waybar_panel_cells_are_sixteen_by_nine_at_current_font_metrics() {
+    fn waybar_panel_cells_leave_room_for_eight_content_lines() {
         let cells = row_grid(Rect::new(0, 0, WAYBAR_PANEL_COLS * 4, WAYBAR_ROWS), 4);
 
         assert!(cells.iter().all(|cell| cell.width == WAYBAR_PANEL_COLS));
@@ -606,7 +650,24 @@ mod tests {
     }
 
     #[test]
-    fn waybar_compacts_blank_rows_inside_panels() {
+    fn decoder_keeps_last_eight_lines_when_capture_is_taller() {
+        // Given
+        let capture =
+            b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven\r\neight\r\nnine\r\n\r\n\r\n";
+
+        // When
+        let full = decode_capture(capture, 12, 16);
+        let parser = tail_parser(full.screen(), 8);
+
+        // Then
+        assert_eq!(
+            parser.screen().contents(),
+            "two\nthree\nfour\nfive\nsix\nseven\neight\nnine"
+        );
+    }
+
+    #[test]
+    fn waybar_places_latest_compacted_row_at_panel_bottom() {
         let panel = Rect::new(0, 0, 6, 6);
         let mut buffer = Buffer::empty(panel);
         buffer[(1, 1)].set_symbol("A");
@@ -614,9 +675,10 @@ mod tests {
 
         compact_panel_rows(&mut buffer, &[panel]);
 
-        assert_eq!(buffer[(1, 1)].symbol(), "A");
-        assert_eq!(buffer[(1, 2)].symbol(), "B");
-        assert_eq!(buffer[(1, 3)].symbol(), " ");
+        assert_eq!(buffer[(1, 1)].symbol(), " ");
+        assert_eq!(buffer[(1, 2)].symbol(), " ");
+        assert_eq!(buffer[(1, 3)].symbol(), "A");
+        assert_eq!(buffer[(1, 4)].symbol(), "B");
     }
 
     #[test]
