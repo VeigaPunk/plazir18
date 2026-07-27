@@ -1,6 +1,6 @@
 {
   "name": "agent-pip",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Multi-panel tmux agent terminal dashboard in Rust",
   "author": {
     "name": "VeigaPunk"

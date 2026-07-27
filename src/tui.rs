@@ -124,27 +124,35 @@ fn decode_capture(capture: &[u8], rows: u16, cols: u16) -> vt100::Parser {
     parser
 }
 
+fn is_opencode_cost_line(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.ends_with("spent") && trimmed.contains('$')
+}
+
 fn tail_parser(screen: &vt100::Screen, rows: u16) -> vt100::Parser {
     let (_, cols) = screen.size();
-    let end = screen
-        .rows(0, cols)
-        .enumerate()
-        .fold(0, |end, (index, line)| {
-            if line.trim().is_empty() {
-                end
-            } else {
-                index + 1
-            }
-        });
+    let plain: Vec<String> = screen.rows(0, cols).collect();
+    let end = plain.iter().enumerate().fold(0, |end, (index, line)| {
+        if line.trim().is_empty() || is_opencode_cost_line(line) {
+            end
+        } else {
+            index + 1
+        }
+    });
     let start = end.saturating_sub(usize::from(rows));
     let mut parser = vt100::Parser::new(rows.max(1), cols.max(1), 0);
-    for (index, line) in screen
+    for (index, (line, text)) in screen
         .rows_formatted(0, cols)
+        .zip(&plain)
         .enumerate()
         .take(end)
         .skip(start)
     {
-        parser.process(&line);
+        if is_opencode_cost_line(text) {
+            parser.process(b" ");
+        } else {
+            parser.process(&line);
+        }
         if index + 1 < end {
             parser.process(b"\r\n");
         }
@@ -647,6 +655,24 @@ mod tests {
 
         assert!(cells.iter().all(|cell| cell.width == WAYBAR_PANEL_COLS));
         assert!(cells.iter().all(|cell| cell.height == WAYBAR_ROWS));
+    }
+
+    #[test]
+    fn tail_parser_strips_opencode_cost_lines() {
+        // Given
+        let capture = b"work\r\n142,592 tokens\r\n74% used\r\n$32.06 spent\r\nlatest";
+
+        // When
+        let full = decode_capture(capture, 5, 32);
+        let parser = tail_parser(full.screen(), 5);
+
+        // Then
+        let contents = parser.screen().contents();
+        assert!(
+            !contents.contains("spent"),
+            "cost line leaked: {contents:?}"
+        );
+        assert!(contents.contains("latest"));
     }
 
     #[test]
