@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -15,6 +15,10 @@ use crate::tmux;
 /// Retry cadence while there is nothing to watch (tmux down / no sessions) —
 /// this is a reconnect probe, not a content poll.
 const RECONNECT: Duration = Duration::from_secs(2);
+
+/// Steady-state cap: 5 iterations/s under continuous output; the first wake
+/// after an idle period stays instant.
+const MIN_REFRESH: Duration = Duration::from_millis(200);
 
 /// Run the loop. `wake` carries pokes from the FIFO reader (real tmux activity)
 /// and from the UI (kill / reveal). `visible` gates the expensive pane capture:
@@ -27,6 +31,7 @@ pub fn run(
     fifo: String,
 ) {
     let mut piped: HashSet<String> = HashSet::new();
+    let mut last_iteration = Instant::now();
     tmux::install_hooks(&fifo);
 
     loop {
@@ -55,17 +60,54 @@ pub fn run(
         // Park until the next real event. With live sessions this is a pure
         // `recv()` (no timer); only an empty wall falls back to the bounded
         // reconnect probe.
-        wait_for_wake(&wake, !sessions.is_empty(), RECONNECT);
+        wait_for_wake(&wake, !sessions.is_empty(), RECONNECT, last_iteration);
+        // Stamped after the wait returns, so `elapsed` at the next call spans
+        // the full wake→work→wait cycle — the quantity MIN_REFRESH caps.
+        last_iteration = Instant::now();
     }
 }
 
 /// Block until the next event. Active (`has_sessions`): pure `recv()`, no
-/// timer — burns zero CPU while sessions sit idle. Idle: bounded
-/// `recv_timeout(reconnect)` probe so a fresh tmux server is noticed. Either
-/// way, drain the backlog so a burst collapses into one refresh.
-fn wait_for_wake(wake: &Receiver<()>, has_sessions: bool, reconnect: Duration) {
+/// timer — burns zero CPU while sessions sit idle — unless the previous
+/// iteration ended less than `MIN_REFRESH` ago, in which case early wakes are
+/// coalesced until that deadline so a sustained output flood caps the loop at
+/// 5 iterations/s. Idle: bounded `recv_timeout(reconnect)` probe so a fresh
+/// tmux server is noticed. Either way, drain the backlog so a burst collapses
+/// into one refresh.
+fn wait_for_wake(
+    wake: &Receiver<()>,
+    has_sessions: bool,
+    reconnect: Duration,
+    last_iteration: Instant,
+) {
     if has_sessions {
-        let _ = wake.recv();
+        if last_iteration.elapsed() >= MIN_REFRESH {
+            // Outside the cooldown: first wake after a quiet period is instant.
+            let _ = wake.recv();
+        } else {
+            // Cooldown: hold every wake until the MIN_REFRESH deadline so a
+            // chatty pane can't spin the loop.
+            let mut woke = false;
+            loop {
+                let remaining = MIN_REFRESH.saturating_sub(last_iteration.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+                match wake.recv_timeout(remaining) {
+                    Ok(()) => {
+                        woke = true;
+                        while wake.try_recv().is_ok() {}
+                    }
+                    // Deadline reached (or sender gone): stop coalescing.
+                    Err(_) => break,
+                }
+            }
+            if !woke {
+                // Nothing arrived during the cooldown — the wall went quiet,
+                // so fall back to the untimed sleep.
+                let _ = wake.recv();
+            }
+        }
     } else {
         let _ = wake.recv_timeout(reconnect);
     }
@@ -74,7 +116,7 @@ fn wait_for_wake(wake: &Receiver<()>, has_sessions: bool, reconnect: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::wait_for_wake;
+    use super::{MIN_REFRESH, wait_for_wake};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
@@ -90,7 +132,13 @@ mod tests {
 
         let handle = std::thread::spawn(move || {
             // reconnect is deliberately tiny; active mode must ignore it entirely.
-            wait_for_wake(&rx, true, Duration::from_millis(20));
+            // last_iteration far in the past skips the cooldown entirely.
+            wait_for_wake(
+                &rx,
+                true,
+                Duration::from_millis(20),
+                Instant::now() - Duration::from_secs(60),
+            );
             flag.store(true, Ordering::SeqCst);
         });
 
@@ -121,7 +169,13 @@ mod tests {
 
         let start = Instant::now();
         for _ in 0..3 {
-            wait_for_wake(&rx, false, reconnect);
+            // last_iteration is irrelevant in idle mode; keep it old anyway.
+            wait_for_wake(
+                &rx,
+                false,
+                reconnect,
+                Instant::now() - Duration::from_secs(60),
+            );
         }
         let elapsed = start.elapsed();
 
@@ -141,7 +195,13 @@ mod tests {
         }
 
         let start = Instant::now();
-        wait_for_wake(&rx, true, Duration::from_secs(30));
+        // last_iteration far in the past: cooldown skipped, semantics unchanged.
+        wait_for_wake(
+            &rx,
+            true,
+            Duration::from_secs(30),
+            Instant::now() - Duration::from_secs(60),
+        );
 
         assert!(
             start.elapsed() < Duration::from_millis(100),
@@ -150,6 +210,31 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "burst was not coalesced into one refresh"
+        );
+    }
+
+    /// Cooldown caps the iteration rate: with a fresh `last_iteration` and a
+    /// wake already queued, the call must hold until ~MIN_REFRESH (the queued
+    /// wake is drained, then the loop waits out the window) and return soon
+    /// after — never before.
+    #[test]
+    fn cooldown_caps_iteration_rate() {
+        let (tx, rx) = mpsc::sync_channel::<()>(8);
+        // Queued BEFORE the call: the first recv_timeout succeeds instantly,
+        // so the elapsed time measures the cooldown window, not scheduling.
+        tx.send(()).unwrap();
+
+        let start = Instant::now();
+        wait_for_wake(&rx, true, Duration::from_secs(30), start);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= MIN_REFRESH - Duration::from_millis(20),
+            "returned in {elapsed:?} (< {MIN_REFRESH:?}) — cooldown not enforced"
+        );
+        assert!(
+            elapsed < MIN_REFRESH + Duration::from_millis(500),
+            "returned in {elapsed:?} — cooldown overshot badly"
         );
     }
 }

@@ -11,9 +11,11 @@ mod ipc;
 mod launch;
 mod persist;
 mod poller;
+mod status;
 mod theme;
 mod tile;
 mod tmux;
+mod tui;
 mod ui;
 mod wake;
 
@@ -42,6 +44,37 @@ fn main() -> eframe::Result<()> {
         }
         #[cfg(unix)]
         ipc::send_toggle();
+        return Ok(());
+    }
+
+    // --status-json: one Waybar line from the same fold the wall renders.
+    // Must stay above the single-instance guard — the bar polls this while the
+    // GUI is running, so it may not bind the port, the IPC socket, or the FIFO.
+    if std::env::args().any(|a| a == "--status-json") {
+        println!(
+            "{}",
+            status::format_status(&tmux::list_sessions(), tmux::now_secs())
+        );
+        std::process::exit(0);
+    }
+
+    // --status-pango: render sessions into waybar via Pango markup. Must stay
+    // above the single-instance guard — the bar polls this while the GUI is
+    // running, so it may not bind the port, the IPC socket, or the FIFO.
+    if std::env::args().any(|a| a == "--status-pango") {
+        let buffer = tui::render_waybar_to_buffer();
+        let markup = tui::buffer_to_pango(&buffer);
+        println!("{}", format_pango_status(&markup));
+        std::process::exit(0);
+    }
+
+    // --tui: launch the ratatui dashboard. Must stay above the single-instance
+    // guard — the TUI must be runnable while the egui GUI is also running.
+    if std::env::args().any(|a| a == "--tui") {
+        if let Err(e) = tui::run() {
+            eprintln!("agent-wall --tui failed: {}", e);
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
@@ -156,6 +189,14 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+fn format_pango_status(markup: &str) -> String {
+    serde_json::json!({
+        "text": markup,
+        "class": "agent-wall",
+    })
+    .to_string()
+}
+
 #[cfg(target_os = "linux")]
 fn toggle_hyprland_special_workspace() -> bool {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
@@ -168,4 +209,19 @@ fn toggle_hyprland_special_workspace() -> bool {
         ])
         .status()
         .is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pango_status_json_escapes_multiline_markup() {
+        let markup = "<span foreground=\"#fff\">C:\\tmp</span>\nnext";
+
+        let output = super::format_pango_status(markup);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("status payload must be valid JSON");
+
+        assert_eq!(parsed["text"], markup);
+        assert_eq!(parsed["class"], "agent-wall");
+    }
 }

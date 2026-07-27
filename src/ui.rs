@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Vec2};
 
@@ -42,7 +42,10 @@ pub struct Wall {
     pub seen_first_list: bool,
     pub win_state: WinState,
     pub layout: LayoutMode,
-    cached_title: String,
+}
+
+pub(crate) fn repaint_delay(visible: bool, has_sessions: bool) -> Option<Duration> {
+    (visible && has_sessions).then(|| Duration::from_secs(1))
 }
 
 impl Wall {
@@ -68,7 +71,6 @@ impl Wall {
             seen_first_list: false,
             win_state,
             layout,
-            cached_title: String::new(),
         }
     }
 
@@ -232,10 +234,19 @@ impl eframe::App for Wall {
         }
 
         let shown = self.sessions.len().min(MAX_CONCURRENT);
-        let title = format!("Agent Wall — {shown}/{} · multi-panel", self.sessions.len());
-        if title != self.cached_title {
-            self.cached_title = title.clone();
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "Agent Wall — {shown}/{} · multi-panel",
+            self.sessions.len()
+        )));
+
+        // The idle counters advance on wall-clock, not on tmux events, so a
+        // visible wall with sessions needs one repaint per second. Hidden or
+        // empty walls stay fully event-driven (zero CPU).
+        if let Some(delay) = repaint_delay(
+            self.visible.load(Ordering::Relaxed),
+            !self.sessions.is_empty(),
+        ) {
+            ctx.request_repaint_after(delay);
         }
     }
 
@@ -270,5 +281,31 @@ impl eframe::App for Wall {
     fn on_exit(&mut self) {
         self.win_state.save();
         crate::tmux::remove_hooks();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repaint_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn visible_wall_with_sessions_repaints_after_one_second() {
+        assert_eq!(repaint_delay(true, true), Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn hidden_wall_with_sessions_does_not_schedule_repaint() {
+        assert_eq!(repaint_delay(false, true), None);
+    }
+
+    #[test]
+    fn visible_empty_wall_does_not_schedule_repaint() {
+        assert_eq!(repaint_delay(true, false), None);
+    }
+
+    #[test]
+    fn hidden_empty_wall_does_not_schedule_repaint() {
+        assert_eq!(repaint_delay(false, false), None);
     }
 }

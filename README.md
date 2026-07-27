@@ -42,6 +42,9 @@ the app falls back to `alacritty`, `kitty`, `foot`, and `xterm`.
 | `--strip` | Legacy horizontal strip |
 | `--no-top` | Disable always-on-top |
 | `--toggle` | Reveal/hide running instance (Hyprland special workspace or IPC) |
+| `--tui` | Launch ratatui dashboard (terminal-based grid, one panel per pane) |
+| `--status-json` | Print Waybar status line and exit |
+| `--status-pango` | Print the multiline colored pane grid as Waybar JSON and exit |
 
 ## Build & deploy (Windows)
 

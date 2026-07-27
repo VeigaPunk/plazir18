@@ -5,11 +5,18 @@ use std::time::Instant;
 use eframe::egui::{self, Align2, FontId, PointerButton, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::theme::{
-    ATTACHED, BORDER, CARD, MUTED, PAD, PANEL_H, PANEL_TAIL_LINES, PANEL_TITLE_H, PANEL_W,
+    ATTACHED, BORDER, CARD, IDLE_W, MUTED, PAD, PANEL_H, PANEL_TAIL_LINES, PANEL_TITLE_H, PANEL_W,
     STRIP_TILE_H, STRIP_W, TEXT, TITLE_BAR, TP_DEBOUNCE,
 };
-use crate::tmux::Meta;
+use crate::tmux::{Meta, now_secs};
 use crate::ui::Wall;
+
+fn strip_pane_clip(rect: Rect) -> Rect {
+    Rect::from_min_size(
+        rect.min + Vec2::new(STRIP_W / 2.0, 0.0),
+        Vec2::new(STRIP_W / 2.0 - 2.0 - IDLE_W, STRIP_TILE_H),
+    )
+}
 
 impl Wall {
     /// One compact 220×28 strip row for a session.
@@ -36,6 +43,7 @@ impl Wall {
             Stroke::new(1.0, BORDER),
             StrokeKind::Inside,
         );
+        let idle = meta.idle_label(now_secs());
 
         if multi_line {
             let title = Rect::from_min_size(rect.min, Vec2::new(rect.width(), PANEL_TITLE_H));
@@ -48,12 +56,27 @@ impl Wall {
             } else {
                 painter.circle_stroke(dot, 3.5, Stroke::new(1.5, BORDER));
             }
-            painter.text(
+            let name_clip = Rect::from_min_max(
+                title.min + Vec2::new(PAD + 10.0 + 2.0, 0.0),
+                title.max - Vec2::new(PAD + IDLE_W, 0.0),
+            );
+            painter.with_clip_rect(name_clip).text(
                 dot + Vec2::new(10.0, 0.0),
                 Align2::LEFT_CENTER,
                 &meta.name,
                 FontId::proportional(10.0),
                 TEXT,
+            );
+            let idle_clip = Rect::from_min_max(
+                egui::pos2(title.max.x - PAD - IDLE_W, title.min.y),
+                title.max,
+            );
+            painter.with_clip_rect(idle_clip).text(
+                title.right_center() - Vec2::new(PAD, 0.0),
+                Align2::RIGHT_CENTER,
+                &idle,
+                FontId::monospace(9.0),
+                MUTED,
             );
 
             let body = Rect::from_min_max(
@@ -116,22 +139,29 @@ impl Wall {
                 .rev()
                 .collect();
 
-            let pane_clip = Rect::from_min_size(
-                rect.min + Vec2::new(STRIP_W / 2.0, 0.0),
-                Vec2::new(STRIP_W / 2.0 - 2.0, STRIP_TILE_H),
-            );
+            let pane_clip = strip_pane_clip(rect);
             let pane_painter = painter.with_clip_rect(pane_clip);
             let pane_font = FontId::monospace(9.0);
             for (i, line) in tail.iter().enumerate() {
                 let y = rect.min.y + 5.0 + i as f32 * 10.0;
                 pane_painter.text(
-                    egui::pos2(rect.max.x - 4.0, y),
+                    egui::pos2(rect.max.x - 4.0 - IDLE_W, y),
                     Align2::RIGHT_TOP,
                     *line,
                     pane_font.clone(),
                     MUTED,
                 );
             }
+
+            let idle_clip =
+                Rect::from_min_max(egui::pos2(rect.max.x - 4.0 - IDLE_W, rect.min.y), rect.max);
+            painter.with_clip_rect(idle_clip).text(
+                egui::pos2(rect.max.x - 4.0, rect.min.y + STRIP_TILE_H / 2.0),
+                Align2::RIGHT_CENTER,
+                &idle,
+                FontId::monospace(9.0),
+                MUTED,
+            );
         }
     }
 
@@ -163,5 +193,18 @@ impl Wall {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IDLE_W, STRIP_TILE_H, STRIP_W, strip_pane_clip};
+    use eframe::egui::{self, vec2};
+
+    #[test]
+    fn strip_pane_clip_reserves_idle_gutter() {
+        let rect = egui::Rect::from_min_size(egui::pos2(7.0, 11.0), vec2(STRIP_W, STRIP_TILE_H));
+        let pane_clip = strip_pane_clip(rect);
+        assert_eq!(pane_clip.max.x, rect.min.x + STRIP_W - 2.0 - IDLE_W);
     }
 }

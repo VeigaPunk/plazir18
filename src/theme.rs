@@ -26,6 +26,9 @@ pub const PANEL_TITLE_H: f32 = 18.0;
 /// Lines of pane tail shown inside each panel body.
 pub const PANEL_TAIL_LINES: usize = 10;
 
+/// Right-hand gutter reserved for the `mm:ss` idle counter.
+pub const IDLE_W: f32 = 34.0;
+
 pub const GAP: f32 = 6.0;
 pub const PAD: f32 = 10.0;
 

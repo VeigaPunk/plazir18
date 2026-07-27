@@ -12,8 +12,9 @@ close to zero CPU while nothing is happening.
 **Goals**
 
 - One glanceable tile per tmux session, with attach-state and a live pane tail.
-- **Event-driven**: the wall reacts to real tmux activity within milliseconds and
-  burns no CPU while every session sits idle. No fixed-interval polling.
+- **Event-driven**: the wall reacts to real tmux activity within milliseconds.
+  Hidden or empty walls use no UI timer and burn no CPU; a visible wall with
+  sessions repaints at 1 Hz to advance idle counters, without polling tmux.
 - Native, crisp, DPI-aware rendering; always-on-top so it stays visible.
 - Mouse-only control: click to attach, right-click to kill, a mouse button to
   reveal/hide.
@@ -121,8 +122,8 @@ This is the load-bearing decision. The wait strategy is chosen purely by
 
 - **Active** (`has_sessions == true`): `wake.recv()` — a plain, **untimed** block.
   While sessions exist, the FIFO (hooks + `pipe-pane`) and UI pokes are the *only*
-  things that can wake the loop. A wall of idle sessions therefore consumes **zero
-  CPU** and does no tmux I/O until something actually changes. There is no
+  things that can wake the loop. With idle sessions the poller therefore consumes
+  **zero CPU** and does no tmux I/O until something actually changes. There is no
   periodic "safety" reconcile.
 - **Idle** (`has_sessions == false`): `wake.recv_timeout(RECONNECT)` with
   `RECONNECT = 2s`. When there are no sessions there is nothing to install a hook
@@ -133,15 +134,21 @@ This is the load-bearing decision. The wait strategy is chosen purely by
 
 After waking, `while wake.try_recv().is_ok() {}` drains the backlog so a burst
 from a chatty pane collapses into a single refresh (second coalescing stage).
+Active waits also carry a `MIN_REFRESH = 200ms` coalescing window measured from
+the previous iteration: the first wake after a quiet period is instant, a
+sustained flood coalesces to at most five refreshes per second, and a window in
+which nothing arrives falls back to the same untimed `recv()` — still zero
+timers while truly idle.
 
-> **Why no safety timer?** An earlier revision kept a slow 15 s `recv_timeout`
+> **Why no poller safety timer?** An earlier revision kept a slow 15 s `recv_timeout`
 > even with live sessions, as a backstop for a missed hook. It was removed: the
 > hooks + `pipe-pane` cover every user-visible transition, and the timer meant the
 > process woke, re-listed, and re-captured every 15 s forever even when the wall
 > was untouched. Blocking on `recv()` makes "idle" genuinely idle. The tradeoff —
 > a silently `kill-server`'d tmux (which fires no `session-closed` hook) leaves
 > stale rows until the next UI poke — is accepted deliberately; normal session
-> close *does* fire the hook.
+> close *does* fire the hook. The UI's 1 Hz idle-counter repaint is UI-thread
+> only: it leaves this untimed `wake.recv()` untouched and performs no tmux I/O.
 
 ### Visibility gate
 
@@ -168,6 +175,7 @@ Each row (`strip_tile`) is hand-painted (not widgets) for density:
 - **Session name** in 9 pt proportional `TEXT`, clipped to the left ~90 px.
 - **Pane tail**: the last 2 non-empty lines of `capture-pane`, 9 pt monospace
   `MUTED`, right-aligned and clipped to the right half of the row.
+- **Idle counter**: right-aligned `mm:ss` in a clipped `IDLE_W` gutter.
 
 ### Palette (`theme.rs`) — compact black / blue / green
 
@@ -201,9 +209,11 @@ hostile session name cannot inject a command.
 
 `eframe::App::logic` runs every frame (even hidden — the poller calls
 `request_repaint`): it drains `rx`/`ipc_rx`, tracks the outer window rect for
-persistence, and updates the title to `"Agent Wall — N sessions"`. `ui` paints
-the rows and processes deferred kills. `on_exit` saves geometry and removes the
-tmux hooks.
+persistence, updates the title to `"Agent Wall — N sessions"`, and runs the
+pure `repaint_delay` gate so idle counter ticks only happen when sessions are
+present and the wall is visible. Hidden or empty walls schedule no timer; visible
+walls with sessions repaint at 1 Hz without tmux I/O. `ui` paints the rows and
+processes deferred kills. `on_exit` saves geometry and removes the tmux hooks.
 
 ---
 

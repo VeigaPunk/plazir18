@@ -1,0 +1,26 @@
+{
+  "name": "agent-pip",
+  "version": "0.1.0",
+  "description": "Multi-panel tmux agent terminal dashboard in Rust",
+  "author": {
+    "name": "VeigaPunk"
+  },
+  "homepage": "https://github.com/VeigaPunk/agent-pip",
+  "repository": "https://github.com/VeigaPunk/agent-pip",
+  "license": "MIT",
+  "keywords": [
+    "agent",
+    "tmux",
+    "dashboard",
+    "terminal",
+    "rust"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Pip (VeigaPunk)",
+    "shortDescription": "Multi-panel tmux agent terminal dashboard in Rust",
+    "longDescription": "Provides install, launch, attach, and Hyprland toggle guidance for the agent-pip always-on-top tmux session dashboard.",
+    "developerName": "VeigaPunk",
+    "websiteURL": "https://github.com/VeigaPunk/agent-pip"
+  }
+}
