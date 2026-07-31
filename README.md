@@ -1,4 +1,4 @@
-# agent-pip (agent-wall)
+# plazir18 (agent-wall)
 
 Multi-panel agent terminal dashboard in Rust (eframe/egui): one **panel per live
 tmux session**, up to **18 concurrent** tiles in a grid. Capacity layout is
@@ -25,16 +25,24 @@ to the wall.
 cargo run -- --strip
 ```
 
-## Linux: clone, build, and run
+## Linux: clone, build, and install
 
 ```bash
-git clone https://github.com/VeigaPunk/agent-pip.git
-cd agent-pip
-cargo run
+git clone https://github.com/VeigaPunk/plazir18.git
+cd plazir18
+cargo build --release --locked
+install -Dm755 target/release/agent-wall ~/.local/bin/plazir18
 ```
 
-`TERMINAL` (if set) is used as primary launcher for left-click attach; otherwise
-the app falls back to `alacritty`, `kitty`, `foot`, and `xterm`.
+Left-click attach launches `alacritty`.
+
+## Omarchy 3.8 launch
+
+Launch the installed 18-panel dashboard through UWSM:
+
+```bash
+uwsm-app -- plazir18
+```
 
 ## Flags
 

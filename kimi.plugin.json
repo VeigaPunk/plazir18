@@ -5,8 +5,8 @@
   "author": {
     "name": "VeigaPunk"
   },
-  "homepage": "https://github.com/VeigaPunk/agent-pip",
-  "repository": "https://github.com/VeigaPunk/agent-pip",
+  "homepage": "https://github.com/VeigaPunk/plazir18",
+  "repository": "https://github.com/VeigaPunk/plazir18",
   "license": "MIT",
   "keywords": [
     "agent",
@@ -17,10 +17,10 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Agent Pip (VeigaPunk)",
+    "displayName": "Plazir18 (VeigaPunk)",
     "shortDescription": "Multi-panel tmux agent terminal dashboard in Rust",
-    "longDescription": "Provides install, launch, attach, and Hyprland toggle guidance for the agent-pip always-on-top tmux session dashboard.",
+    "longDescription": "Provides install, launch, attach, and Hyprland toggle guidance for the plazir18 always-on-top tmux session dashboard.",
     "developerName": "VeigaPunk",
-    "websiteURL": "https://github.com/VeigaPunk/agent-pip"
+    "websiteURL": "https://github.com/VeigaPunk/plazir18"
   }
 }

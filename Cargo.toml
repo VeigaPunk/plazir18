@@ -2,6 +2,10 @@
 name = "agent-wall"
 version = "0.2.1"
 edition = "2024"
+description = "An 18-panel tmux agent dashboard for Omarchy and other Linux desktops"
+license = "MIT"
+repository = "https://github.com/VeigaPunk/plazir18"
+homepage = "https://github.com/VeigaPunk/plazir18"
 
 [dependencies]
 crossterm = "0.29"

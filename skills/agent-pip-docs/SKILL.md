@@ -1,30 +1,30 @@
 ---
 name: agent-pip-docs
-description: Install, run, and control the agent-pip multi-panel tmux agent dashboard.
+description: Install, run, and control the plazir18 multi-panel tmux agent dashboard.
 ---
 
-agent-pip is a Rust (`eframe`/`egui`) always-on-top dashboard that shows one tile per live tmux session. Each tile displays the session name, attach state, and the last few pane lines.
+plazir18 is a Rust (`eframe`/`egui`) always-on-top dashboard that shows one tile per live tmux session. Each tile displays the session name, attach state, and the last few pane lines.
 
 ## Install
 
 ```bash
-git clone https://github.com/VeigaPunk/agent-pip.git
-cd agent-pip
-cargo build --release
+git clone https://github.com/VeigaPunk/plazir18.git
+cd plazir18
+cargo build --release --locked
 # binary is at target/release/agent-wall
-cp target/release/agent-wall ~/.local/bin/agent-pip
+install -Dm755 target/release/agent-wall ~/.local/bin/plazir18
 ```
 
 ## Run the dashboard
 
 ```bash
-agent-pip
+uwsm-app -- plazir18
 ```
 
 ## Run the legacy strip
 
 ```bash
-agent-pip --strip
+plazir18 --strip
 ```
 
 ## Toggle visibility (Hyprland)
@@ -32,18 +32,18 @@ agent-pip --strip
 Add a key bind to `~/.config/hypr/hyprland.conf`:
 
 ```ini
-bind = $mainMod, A, exec, agent-pip --toggle
+bind = $mainMod, A, exec, plazir18 --toggle
 ```
 
 On other compositors, use the IPC toggle directly:
 
 ```bash
-agent-pip --toggle
+plazir18 --toggle
 ```
 
 ## Attach or kill a session
 
-- **Left-click** a tile to attach in your terminal (`TERMINAL` env, or `alacritty` / `kitty` / `foot` / `xterm` fallback).
+- **Left-click** a tile to attach in `alacritty`.
 - **Right-click** a tile to kill that tmux session.
 
 ## Requirements
