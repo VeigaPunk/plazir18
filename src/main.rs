@@ -20,14 +20,22 @@ mod ui;
 mod wake;
 
 use persist::WinState;
-use theme::{GAP, MAX_CONCURRENT, PAD, PANEL_H, PANEL_W};
+use theme::{
+    GAP, MAX_CONCURRENT, PAD, PANEL_CAP_COLS, PANEL_CAP_ROWS, PANEL_H, PANEL_HEADER_H,
+    PANEL_HEADER_SPACER_H, PANEL_W,
+};
 use ui::{LayoutMode, Wall};
 
 /// Legacy full-width strip defaults.
 const STRIP_WIN_W: f32 = 3440.0;
 const STRIP_WIN_H: f32 = 58.0;
-/// Multi-panel dashboard default height (width is computed from 6-col grid).
-const PANEL_WIN_H: f32 = 720.0;
+/// Multi-panel dashboard default size matches the 6×3 capacity grid.
+const PANEL_WIN_W: f32 = PAD * 2.0 + PANEL_CAP_COLS * PANEL_W + (PANEL_CAP_COLS - 1.0) * GAP;
+const PANEL_WIN_H: f32 = PAD * 2.0
+    + PANEL_HEADER_H
+    + PANEL_HEADER_SPACER_H
+    + PANEL_CAP_ROWS * PANEL_H
+    + (PANEL_CAP_ROWS - 1.0) * GAP;
 
 pub enum AppMsg {
     Sessions(Vec<tmux::Meta>),
@@ -119,17 +127,12 @@ fn main() -> eframe::Result<()> {
 
     let default_w = match layout {
         LayoutMode::Strip => STRIP_WIN_W,
-        LayoutMode::Panel => {
-            // 6 columns × panel + gaps + pad, enough for 24 tiles in a 6×4 grid.
-            let cols = 6.0_f32;
-            PAD * 2.0 + cols * PANEL_W + (cols - 1.0) * GAP
-        }
+        LayoutMode::Panel => PANEL_WIN_W,
     };
     let default_h = match layout {
         LayoutMode::Strip => STRIP_WIN_H,
         LayoutMode::Panel => PANEL_WIN_H,
     };
-    let _ = PANEL_H; // used by layout sizing docs / future auto-fit
 
     let w = if win_state.w > 0 {
         win_state.w as f32
@@ -213,6 +216,12 @@ fn toggle_hyprland_special_workspace() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn panel_default_size_matches_6x3_capacity_grid() {
+        assert_eq!(super::PANEL_WIN_W, 1_970.0);
+        assert_eq!(super::PANEL_WIN_H, 537.0);
+    }
+
     #[test]
     fn pango_status_json_escapes_multiline_markup() {
         let markup = "<span foreground=\"#fff\">C:\\tmp</span>\nnext";

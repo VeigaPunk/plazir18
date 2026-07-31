@@ -13,7 +13,8 @@ use crate::AppMsg;
 use crate::ipc::IpcCmd;
 use crate::persist::WinState;
 use crate::theme::{
-    BG, GAP, MAX_CONCURRENT, MUTED, PAD, PANEL_H, PANEL_W, STRIP_TILE_H, WIN_H, grid_cols,
+    BG, GAP, MAX_CONCURRENT, MUTED, PAD, PANEL_H, PANEL_HEADER_SPACER_H, PANEL_W, STRIP_TILE_H,
+    WIN_H, grid_cols,
 };
 use crate::tmux::Meta;
 
@@ -180,7 +181,7 @@ impl Wall {
                 );
             });
         });
-        ui.add_space(4.0);
+        ui.add_space(PANEL_HEADER_SPACER_H);
 
         if sessions.is_empty() {
             ui.label(
@@ -286,7 +287,7 @@ impl eframe::App for Wall {
 
 #[cfg(test)]
 mod tests {
-    use super::repaint_delay;
+    use super::{LayoutMode, Meta, Wall, grid_cols, repaint_delay};
     use std::time::Duration;
 
     #[test]
@@ -307,5 +308,38 @@ mod tests {
     #[test]
     fn hidden_empty_wall_does_not_schedule_repaint() {
         assert_eq!(repaint_delay(false, false), None);
+    }
+
+    #[test]
+    fn visible_sessions_caps_panel_rendering_at_18() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        drop(tx);
+        #[cfg(unix)]
+        let (ipc_tx, ipc_rx) = std::sync::mpsc::sync_channel(1);
+        #[cfg(unix)]
+        drop(ipc_tx);
+
+        let mut wall = Wall::new(
+            rx,
+            #[cfg(unix)]
+            ipc_rx,
+            crate::persist::WinState::default(),
+            std::sync::mpsc::sync_channel(1).0,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            LayoutMode::Panel,
+        );
+
+        wall.sessions = (0..19)
+            .map(|i| Meta {
+                id: format!("${i}"),
+                name: format!("s{i}"),
+                activity: None,
+                attached: i % 2 == 0,
+            })
+            .collect();
+
+        let visible = wall.visible_sessions();
+        assert_eq!(visible.len(), 18);
+        assert_eq!(grid_cols(visible.len()), 6);
     }
 }

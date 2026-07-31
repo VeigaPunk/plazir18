@@ -12,7 +12,15 @@ pub const BORDER: Color32 = Color32::from_rgb(0x23, 0x2a, 0x38);
 pub const TITLE_BAR: Color32 = Color32::from_rgb(0x12, 0x16, 0x1f);
 
 /// Hard concurrent agent / terminal panel ceiling. No soft nudge below this.
-pub const MAX_CONCURRENT: usize = 24;
+pub const MAX_CONCURRENT: usize = 18;
+
+/// Multi-panel capacity grid at the ceiling: 6 columns × 3 rows.
+pub const PANEL_CAP_COLS: f32 = 6.0;
+pub const PANEL_CAP_ROWS: f32 = 3.0;
+
+/// Header row above the panel grid, including egui's vertical item spacing.
+pub const PANEL_HEADER_H: f32 = 21.0;
+pub const PANEL_HEADER_SPACER_H: f32 = 4.0;
 
 /// Compact strip (legacy top-bar) tile size.
 pub const WIN_H: f32 = 58.0;
@@ -44,7 +52,7 @@ pub fn grid_cols(n: usize) -> usize {
         3..=4 => 2,
         5..=9 => 3,
         10..=16 => 4,
-        17..=24 => 6,
+        17..=18 => 6,
         _ => 6,
     }
 }
@@ -54,13 +62,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grid_cols_covers_full_24_ceiling() {
+    fn grid_cols_covers_full_18_ceiling() {
         assert_eq!(grid_cols(0), 1);
         assert_eq!(grid_cols(1), 1);
         assert_eq!(grid_cols(4), 2);
         assert_eq!(grid_cols(9), 3);
         assert_eq!(grid_cols(16), 4);
-        assert_eq!(grid_cols(24), 6);
-        assert_eq!(MAX_CONCURRENT, 24);
+        assert_eq!(grid_cols(18), 6);
+        assert_eq!(grid_cols(19), 6);
+        assert_eq!(MAX_CONCURRENT, 18);
+        assert_eq!(PANEL_CAP_COLS, 6.0);
+        assert_eq!(PANEL_CAP_ROWS, 3.0);
     }
 }

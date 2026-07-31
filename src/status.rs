@@ -26,7 +26,7 @@ fn escape_pango(value: &str) -> String {
 /// Format a list of tmux sessions into a single Waybar JSON line.
 ///
 /// Returns a JSON object with keys:
-/// - `text`: one glyph per session (●/○), capped at 24, with +N overflow indicator
+/// - `text`: one glyph per session (●/○), capped at 18, with +N overflow indicator
 /// - `tooltip`: one line per shown session with name, idle time, and attach state
 /// - `class`: "active" if sessions non-empty, "empty" if empty
 pub fn format_status(sessions: &[crate::tmux::Meta], now: i64) -> String {
@@ -171,9 +171,9 @@ mod tests {
     }
 
     #[test]
-    fn format_status_caps_at_24_with_overflow() {
+    fn format_status_caps_at_18_with_overflow() {
         let mut sessions = Vec::new();
-        for i in 0..26 {
+        for i in 0..20 {
             sessions.push(crate::tmux::Meta {
                 id: format!("${}", i),
                 name: format!("s{}", i),
@@ -189,7 +189,7 @@ mod tests {
 
         let text = parsed["text"].as_str().expect("text must be string");
         let dot_count = text.matches('●').count() + text.matches('○').count();
-        assert_eq!(dot_count, 24, "text must contain exactly 24 glyphs");
+        assert_eq!(dot_count, 18, "text must contain exactly 18 glyphs");
         assert!(
             text.contains("+2"),
             "text must contain +2 overflow indicator"

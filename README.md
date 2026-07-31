@@ -1,8 +1,9 @@
 # agent-pip (agent-wall)
 
 Multi-panel agent terminal dashboard in Rust (eframe/egui): one **panel per live
-tmux session**, up to **24 concurrent** tiles in a grid. Live pane tails,
-DPI-aware rendering, always-on-top optional.
+tmux session**, up to **18 concurrent** tiles in a grid. Capacity layout is
+**6 columns × 3 rows**. Live pane tails, DPI-aware rendering, always-on-top
+optional.
 
 **tmux is a must** — sessions only get a tile if they run inside tmux
 (`capture-pane` is the feed). Anything launched outside tmux is invisible
@@ -12,8 +13,9 @@ to the wall.
 
 **Default: multi-panel grid** (dashboard of terminals)
 
-- Up to **24** concurrent panels (hard ceiling; no soft nudge below that).
+- Up to **18** concurrent panels (hard ceiling; no soft nudge below that).
 - Adaptive columns: 1 / 2 / 3 / 4 / 6 cols by count.
+- At capacity: 6 columns × 3 rows.
 - Each panel: title + attach dot + last ~10 non-empty pane lines.
 - Left-click → attach in terminal · right-click → kill.
 
@@ -38,7 +40,7 @@ the app falls back to `alacritty`, `kitty`, `foot`, and `xterm`.
 
 | Flag | Effect |
 |------|--------|
-| *(none)* | Multi-panel dashboard, max 24 tiles |
+| *(none)* | Multi-panel dashboard, max 18 tiles |
 | `--strip` | Legacy horizontal strip |
 | `--no-top` | Disable always-on-top |
 | `--toggle` | Reveal/hide running instance (Hyprland special workspace or IPC) |
