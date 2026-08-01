@@ -2,6 +2,7 @@
 //! Conversation + thin status + input. Slash commands. Zero chrome.
 
 use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
+use crate::agent::{run_tool_loop, tool_loop_enabled};
 use crate::auth::{self, AuthProvider, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat, apply_chat_turn};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -99,7 +100,8 @@ impl App {
             messages: vec![ChatMessage {
                 role: "system".into(),
                 content: "You are plazir18, a minimal open coding agent (OpenCode \u{00d7} titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.".into(),
-            }],
+                        ..Default::default()
+}],
             input: String::new(),
             status,
             mode: Mode::Build,
@@ -521,6 +523,7 @@ impl App {
         self.messages.push(ChatMessage {
             role: "assistant".into(),
             content: content.into(),
+            ..Default::default()
         });
     }
 
@@ -639,7 +642,8 @@ impl App {
                         ChatMessage {
                             role: "system".into(),
                             content: "You are plazir18, a minimal open coding agent (OpenCode \u{00d7} titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.".into(),
-                        },
+                                    ..Default::default()
+},
                     );
                 }
                 self.session = s;
@@ -768,6 +772,7 @@ impl App {
             self.messages.push(ChatMessage {
                 role: "user".into(),
                 content: expanded,
+                ..Default::default()
             });
             self.push_assistant("not connected. /connect first.");
             let _ = self.persist();
@@ -778,34 +783,67 @@ impl App {
         req.push(ChatMessage {
             role: "user".into(),
             content: expanded.clone(),
+            ..Default::default()
         });
         let (id, client) = self.provider.as_ref().expect("checked");
         let id = *id;
-        let first = client.chat(&req);
-        let result = match first {
-            Ok(reply) => Ok(reply),
-            Err(e) if e.is_unauthorized() => {
-                // One-shot OAuth refresh + retry (OpenAI/xAI; needs refresh_token in store).
-                if self.try_refresh_active_provider(id) {
-                    if let Some((_, client)) = &self.provider {
-                        client.chat(&req)
+        let plan_mode = self.mode == Mode::Plan;
+        if tool_loop_enabled() {
+            // Mutate history in place via tool loop (user turn already in req).
+            self.messages = req;
+            let loop_result = {
+                let client = &self.provider.as_ref().expect("checked").1;
+                run_tool_loop(client, &mut self.messages, plan_mode)
+            };
+            let loop_result = match loop_result {
+                Ok(v) => Ok(v),
+                Err(e) if e.is_unauthorized() => {
+                    if self.try_refresh_active_provider(id) {
+                        let client = &self.provider.as_ref().expect("checked").1;
+                        run_tool_loop(client, &mut self.messages, plan_mode)
                     } else {
                         Err(e)
                     }
-                } else {
-                    Err(e)
                 }
+                Err(e) => Err(e),
+            };
+            match loop_result {
+                Ok((reply, notes)) => {
+                    for n in notes {
+                        self.push_assistant(format!("tool: {n}"));
+                    }
+                    self.push_assistant(reply);
+                }
+                Err(e) => self.push_assistant(format!("error: {e}")),
             }
-            Err(e) => Err(e),
-        };
-        match result {
-            Ok(reply) => apply_chat_turn(&mut self.messages, expanded, reply),
-            Err(e) => {
-                self.messages.push(ChatMessage {
-                    role: "user".into(),
-                    content: expanded,
-                });
-                self.push_assistant(format!("error: {e}"));
+        } else {
+            let first = client.chat(&req);
+            let result = match first {
+                Ok(reply) => Ok(reply),
+                Err(e) if e.is_unauthorized() => {
+                    // One-shot OAuth refresh + retry (OpenAI/xAI; needs refresh_token in store).
+                    if self.try_refresh_active_provider(id) {
+                        if let Some((_, client)) = &self.provider {
+                            client.chat(&req)
+                        } else {
+                            Err(e)
+                        }
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(reply) => apply_chat_turn(&mut self.messages, expanded, reply),
+                Err(e) => {
+                    self.messages.push(ChatMessage {
+                        role: "user".into(),
+                        content: expanded,
+                        ..Default::default()
+                    });
+                    self.push_assistant(format!("error: {e}"));
+                }
             }
         }
         let _ = self.persist();
@@ -815,21 +853,25 @@ impl App {
     fn try_refresh_active_provider(&mut self, id: ProviderId) -> bool {
         #[cfg(feature = "oauth")]
         {
-            if id != ProviderId::Openai {
+            if !matches!(id, ProviderId::Openai | ProviderId::Xai) {
                 return false;
             }
             let stored = auth::load_all().unwrap_or_default();
-            let Some(cred) = stored.get(&ProviderId::Openai) else {
+            let Some(cred) = stored.get(&id) else {
                 return false;
             };
             let Some(rt) = cred.refresh_token.as_deref().filter(|s| !s.is_empty()) else {
                 return false;
             };
-            match auth::openai_refresh_access_token(rt) {
+            let refreshed = match id {
+                ProviderId::Openai => auth::openai_refresh_access_token(rt),
+                ProviderId::Xai => auth::xai_refresh_access_token(rt),
+                _ => return false,
+            };
+            match refreshed {
                 Ok(new_cred) => {
-                    let _ = auth::save(ProviderId::Openai, new_cred.clone());
-                    if let Ok(client) = provider::client_for(ProviderId::Openai, &new_cred) {
-                        // Preserve user-selected model if any.
+                    let _ = auth::save(id, new_cred.clone());
+                    if let Ok(client) = provider::client_for(id, &new_cred) {
                         let model = self
                             .provider
                             .as_ref()
@@ -837,7 +879,7 @@ impl App {
                             .unwrap_or_else(|| client.model.clone());
                         let mut client = client;
                         client.model = model;
-                        self.provider = Some((ProviderId::Openai, client));
+                        self.provider = Some((id, client));
                         self.refresh_status();
                         return true;
                     }
@@ -956,17 +998,22 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
                 "no provider — set OPENAI_API_KEY / XAI_API_KEY / OPENCODE_ZEN_API_KEY or run Local (Ollama)",
             )
         })?;
-    let messages = vec![
-        ChatMessage {
-            role: "system".into(),
-            content: "You are plazir18, a minimal open coding agent. Be concise.".into(),
-        },
-        ChatMessage {
-            role: "user".into(),
-            content: expand_at_files(prompt),
-        },
+    let mut messages = vec![
+        ChatMessage::text(
+            "system",
+            "You are plazir18, a minimal open coding agent. Be concise.",
+        ),
+        ChatMessage::text("user", expand_at_files(prompt)),
     ];
-    let reply = match client.chat(&messages) {
+    let use_tools = tool_loop_enabled();
+    let chat_once = |c: &OpenAICompat, msgs: &mut Vec<ChatMessage>| {
+        if use_tools {
+            run_tool_loop(c, msgs, false).map(|(r, _)| r)
+        } else {
+            c.chat(msgs)
+        }
+    };
+    let reply = match chat_once(&client, &mut messages) {
         Ok(r) => r,
         #[cfg(feature = "oauth")]
         Err(e) if e.is_unauthorized() => {
@@ -979,9 +1026,9 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
                     _ => None,
                 }?;
                 let _ = auth::save(id, fresh.clone());
-                provider::client_for(id, &fresh)
-                    .ok()
-                    .and_then(|c2| c2.chat(&messages).ok())
+                let c2 = provider::client_for(id, &fresh).ok()?;
+                let mut msgs = messages.clone();
+                chat_once(&c2, &mut msgs).ok()
             });
             retry.ok_or_else(|| io::Error::other(e.to_string()))?
         }

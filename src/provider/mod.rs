@@ -3,10 +3,63 @@
 use crate::auth::{Credential, ProviderId};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatMessage {
     pub role: String,
+    /// OpenAI may send `null` when using tool_calls; treat as empty.
+    #[serde(default, deserialize_with = "deserialize_maybe_content")]
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            ..Default::default()
+        }
+    }
+}
+
+fn deserialize_maybe_content<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
+/// OpenAI-compatible tool call on an assistant message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type", default = "default_function_type")]
+    pub kind: String,
+    pub function: ToolFunction,
+}
+
+fn default_function_type() -> String {
+    "function".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunction {
+    pub name: String,
+    /// JSON-encoded arguments object.
+    pub arguments: String,
+}
+
+/// Result of one model completion (text and/or tool calls).
+#[derive(Debug, Clone)]
+pub struct AssistantTurn {
+    pub content: String,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 #[derive(Debug, Serialize)]
@@ -14,6 +67,10 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,11 +151,33 @@ impl OpenAICompat {
     }
 
     fn chat_blocking(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
+        let turn = self.chat_turn(messages, None)?;
+        if turn.content.is_empty() && !turn.tool_calls.is_empty() {
+            return Ok(String::new());
+        }
+        if turn.content.is_empty() {
+            return Err(ProviderError::Empty);
+        }
+        Ok(turn.content)
+    }
+
+    /// Non-stream completion with optional tools; returns full assistant turn.
+    pub fn chat_turn(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[serde_json::Value]>,
+    ) -> Result<AssistantTurn, ProviderError> {
         let url = format!("{}/chat/completions", self.base_url);
         let body = ChatRequest {
             model: self.model.clone(),
             messages: messages.to_vec(),
             stream: false,
+            tools: tools.map(|t| t.to_vec()),
+            tool_choice: if tools.map(|t| !t.is_empty()).unwrap_or(false) {
+                Some("auto".into())
+            } else {
+                None
+            },
         };
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
@@ -117,7 +196,7 @@ impl OpenAICompat {
         let text = resp
             .text()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
-        parse_chat_completion_body(&text)
+        parse_assistant_turn(&text)
     }
 
     /// Streaming chat (SSE). Accumulates `delta.content` into a full reply.
@@ -127,6 +206,8 @@ impl OpenAICompat {
             model: self.model.clone(),
             messages: messages.to_vec(),
             stream: true,
+            tools: None,
+            tool_choice: None,
         };
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
@@ -184,14 +265,101 @@ impl OpenAICompat {
 /// Pure: extract first choice content from an OpenAI-compatible chat JSON body.
 /// Unit-tested without network (M6 scaffold path).
 pub fn parse_chat_completion_body(body: &str) -> Result<String, ProviderError> {
+    let turn = parse_assistant_turn(body)?;
+    if turn.content.is_empty() && turn.tool_calls.is_empty() {
+        return Err(ProviderError::Empty);
+    }
+    Ok(turn.content)
+}
+
+/// Pure: parse assistant message including optional tool_calls.
+pub fn parse_assistant_turn(body: &str) -> Result<AssistantTurn, ProviderError> {
     let parsed: ChatResponse =
         serde_json::from_str(body).map_err(|e| ProviderError::Other(e.to_string()))?;
-    parsed
+    let msg = parsed
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content)
-        .ok_or(ProviderError::Empty)
+        .map(|c| c.message)
+        .ok_or(ProviderError::Empty)?;
+    Ok(AssistantTurn {
+        content: msg.content,
+        tool_calls: msg.tool_calls,
+    })
+}
+
+/// Builtin OpenAI tool definitions for plazir agent tools.
+pub fn builtin_tool_defs() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": "Run a shell command (build mode only)",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "cmd": { "type": "string" } },
+                    "required": ["cmd"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a text file",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write a text file (build mode only)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "content": { "type": "string" }
+                    },
+                    "required": ["path", "content"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "List directory entries",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "Replace first (or all) occurrences in a file (build mode only)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "old": { "type": "string" },
+                        "new": { "type": "string" },
+                        "all": { "type": "boolean" }
+                    },
+                    "required": ["path", "old", "new"]
+                }
+            }
+        }),
+    ]
 }
 
 /// Prefer SSE stream when `PLAZIR_CHAT_STREAM` is 1/true/yes (default: on for local-ish bases).
@@ -270,10 +438,12 @@ pub fn apply_chat_turn(
     messages.push(ChatMessage {
         role: "user".into(),
         content: user.into(),
+        ..Default::default()
     });
     messages.push(ChatMessage {
         role: "assistant".into(),
         content: assistant.into(),
+        ..Default::default()
     });
 }
 
@@ -441,6 +611,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_assistant_turn_with_tool_calls_and_null_content() {
+        let body = r#"{
+          "choices": [{
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "bash", "arguments": "{\"cmd\":\"echo hi\"}"}
+              }]
+            }
+          }]
+        }"#;
+        let turn = parse_assistant_turn(body).unwrap();
+        assert!(turn.content.is_empty());
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].function.name, "bash");
+    }
+
+    #[test]
     fn accumulate_sse_chat_body_joins_deltas() {
         let body = "\
 data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n\
@@ -515,6 +706,7 @@ data: [DONE]\n\n";
             .chat(&[ChatMessage {
                 role: "user".into(),
                 content: "Reply with exactly the single word: pong".into(),
+                ..Default::default()
             }])
             .expect("live chat");
         assert!(
