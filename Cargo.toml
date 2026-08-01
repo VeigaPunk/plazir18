@@ -1,11 +1,18 @@
 [package]
 name = "agent-wall"
-version = "0.2.1"
+version = "0.3.0-alpha.1"
 edition = "2024"
-description = "An 18-panel tmux agent dashboard for Omarchy and other Linux desktops"
+description = "Minimal open TUI coding agent + 18-panel tmux agent wall (OpenCode × titanium breed)"
 license = "MIT"
 repository = "https://github.com/VeigaPunk/plazir18"
 homepage = "https://github.com/VeigaPunk/plazir18"
+
+[features]
+default = ["wall"]
+wall = []
+agent = ["dep:reqwest", "dep:tokio", "dep:toml", "dep:dirs", "dep:thiserror", "dep:async-trait"]
+oauth = ["agent", "dep:url", "dep:sha2", "dep:base64", "dep:rand"]
+full = ["wall", "agent", "oauth"]
 
 [dependencies]
 crossterm = "0.29"
@@ -15,3 +22,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tui-term = "0.3"
 vt100 = "0.16"
+
+# Optional agent stack (feature = "agent")
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"], optional = true }
+toml = { version = "0.8", optional = true }
+dirs = { version = "6", optional = true }
+thiserror = { version = "2", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+# Optional OAuth helpers (feature = "oauth")
+url = { version = "2", optional = true }
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
+rand = { version = "0.8", optional = true }
