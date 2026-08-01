@@ -866,7 +866,7 @@ impl App {
                         let client = &self.provider.as_ref().expect("checked").1;
                         match client.chat_turn(&self.messages, None) {
                             Ok(t) if !t.content.is_empty() => self.push_assistant(t.content),
-                            Ok(_) => self.push_assistant("(no final text after tools)".into()),
+                            Ok(_) => self.push_assistant("(no final text after tools)".to_string()),
                             Err(e) => self.push_assistant(format!("error: {e}")),
                         }
                         let _ = self.persist();
