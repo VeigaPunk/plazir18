@@ -9,6 +9,8 @@ mod xai;
 mod zen;
 
 #[cfg(feature = "oauth")]
+pub mod browser;
+#[cfg(feature = "oauth")]
 pub mod loopback;
 #[cfg(feature = "oauth")]
 pub mod pkce;
@@ -19,12 +21,14 @@ pub use xai::XaiAuth;
 pub use zen::ZenAuth;
 
 #[cfg(feature = "oauth")]
+pub use browser::open_url_best_effort;
+#[cfg(feature = "oauth")]
 pub use loopback::{LOOPBACK_ADDR, bind_addr_from_redirect, wait_for_oauth_callback};
 #[cfg(feature = "oauth")]
 pub use openai::{
     OPENAI_LOOPBACK_REDIRECT, openai_browser_oauth_start, openai_exchange_code,
-    openai_refresh_access_token, xai_authorize_url_hint, xai_browser_oauth_start,
-    xai_exchange_code,
+    openai_poll_device_token, openai_refresh_access_token, openai_request_device_code,
+    xai_authorize_url_hint, xai_browser_oauth_start, xai_exchange_code,
 };
 
 use serde::{Deserialize, Serialize};

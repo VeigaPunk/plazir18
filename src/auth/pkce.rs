@@ -95,6 +95,12 @@ pub const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 /// Default xAI token endpoint (override with `PLAZIR_XAI_TOKEN_URL`).
 pub const XAI_TOKEN_URL: &str = "https://auth.x.ai/oauth/token";
 
+/// OAuth 2.0 device authorization endpoint (override `PLAZIR_OPENAI_DEVICE_URL`).
+pub const OPENAI_DEVICE_CODE_URL: &str = "https://auth.openai.com/oauth/device/code";
+
+/// RFC 8628 device_code grant type.
+pub const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
 /// Build a PKCE authorize URL against the xAI host (client_id supplied by caller).
 pub fn xai_authorize_url(
     client_id: &str,
@@ -146,6 +152,52 @@ pub fn oauth_refresh_body(client_id: &str, refresh_token: &str) -> String {
 
 pub fn openai_refresh_body(refresh_token: &str) -> String {
     oauth_refresh_body(OPENAI_OAUTH_CLIENT_ID, refresh_token)
+}
+
+/// Device authorization request body (RFC 8628).
+pub fn device_code_request_body(client_id: &str, scope: &str) -> String {
+    let mut body = String::new();
+    push_q(&mut body, "client_id", client_id);
+    if !scope.is_empty() {
+        push_q(&mut body, "scope", scope);
+    }
+    body
+}
+
+/// Token poll body for device_code grant.
+pub fn device_token_poll_body(client_id: &str, device_code: &str) -> String {
+    let mut body = String::new();
+    push_q(&mut body, "grant_type", DEVICE_CODE_GRANT);
+    push_q(&mut body, "client_id", client_id);
+    push_q(&mut body, "device_code", device_code);
+    body
+}
+
+/// Device authorization response (subset of RFC 8628).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeviceCodeJson {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    #[serde(default)]
+    pub verification_uri_complete: Option<String>,
+    #[serde(default)]
+    pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub interval: Option<u64>,
+}
+
+pub fn parse_device_code_json(body: &str) -> Result<DeviceCodeJson, String> {
+    serde_json::from_str(body).map_err(|e| e.to_string())
+}
+
+/// Classify a token-poll error JSON (`error` field) for device flow.
+pub fn parse_oauth_error_code(body: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct E {
+        error: Option<String>,
+    }
+    serde_json::from_str::<E>(body).ok().and_then(|e| e.error)
 }
 
 /// Parse `code` + `state` from a callback URL or raw query string.
@@ -349,5 +401,25 @@ mod tests {
         assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
         assert!(cred.expires_at.is_some());
         assert_eq!(cred.base_url.as_deref(), Some("https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn device_code_bodies_and_parse() {
+        let req = device_code_request_body(OPENAI_OAUTH_CLIENT_ID, "openid");
+        assert!(req.contains("client_id="));
+        assert!(req.contains("scope=openid"));
+        let poll = device_token_poll_body(OPENAI_OAUTH_CLIENT_ID, "dc");
+        assert!(poll.contains("device_code=dc"));
+        assert!(poll.contains("grant_type="));
+        let j = parse_device_code_json(
+            r#"{"device_code":"d","user_code":"ABCD","verification_uri":"https://example.com/device","expires_in":600,"interval":5}"#,
+        )
+        .unwrap();
+        assert_eq!(j.user_code, "ABCD");
+        assert_eq!(j.interval, Some(5));
+        assert_eq!(
+            parse_oauth_error_code(r#"{"error":"authorization_pending"}"#).as_deref(),
+            Some("authorization_pending")
+        );
     }
 }

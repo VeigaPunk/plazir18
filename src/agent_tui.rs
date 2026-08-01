@@ -53,6 +53,9 @@ struct App {
     /// Background loopback listener result channel.
     #[cfg(feature = "oauth")]
     oauth_listen_rx: Option<std::sync::mpsc::Receiver<Result<(String, String), String>>>,
+    /// Background device-code poll result.
+    #[cfg(feature = "oauth")]
+    oauth_device_rx: Option<std::sync::mpsc::Receiver<Result<auth::Credential, String>>>,
 }
 
 impl App {
@@ -87,13 +90,15 @@ impl App {
             oauth_pending: None,
             #[cfg(feature = "oauth")]
             oauth_listen_rx: None,
+            #[cfg(feature = "oauth")]
+            oauth_device_rx: None,
         }
     }
 
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
@@ -157,10 +162,49 @@ impl App {
                     state: state.clone(),
                     kind: OAuthPendingKind::Openai,
                 });
+                let open_note = auth::open_url_best_effort(&url)
+                    .map(|_| "browser launch attempted".to_string())
+                    .unwrap_or_else(|e| format!("browser open skipped ({e})"));
                 self.push_assistant(format!(
-                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2a) /oauth-wait  (background listen :1455, 180s; TUI stays live)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI: /oauth-xai if PLAZIR_XAI_OAUTH_CLIENT_ID set (host {})",
+                    "OpenAI browser PKCE started ({open_note}).\n1) open:\n{url}\n2a) /oauth-wait  (background listen :1455, 180s; TUI stays live)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\n3) headless: /oauth-device\nxAI: /oauth-xai if PLAZIR_XAI_OAUTH_CLIENT_ID set (host {})",
                     auth::xai_authorize_url_hint()
                 ));
+            }
+            #[cfg(feature = "oauth")]
+            "oauth-device" => {
+                if self.oauth_device_rx.is_some() {
+                    self.push_assistant("device poll already running");
+                    return;
+                }
+                match auth::openai_request_device_code() {
+                    Ok(dc) => {
+                        let verify = dc
+                            .verification_uri_complete
+                            .clone()
+                            .unwrap_or_else(|| dc.verification_uri.clone());
+                        let _ = auth::open_url_best_effort(&verify);
+                        let interval = dc.interval.unwrap_or(5).max(1);
+                        let expires = dc.expires_in.unwrap_or(600);
+                        let device_code = dc.device_code.clone();
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let r = auth::openai_poll_device_token(
+                                &device_code,
+                                interval,
+                                std::time::Duration::from_secs(expires.min(900)),
+                            );
+                            let _ = tx.send(r);
+                        });
+                        self.oauth_device_rx = Some(rx);
+                        self.push_assistant(format!(
+                            "OpenAI device code started.\nuser_code: {}\nvisit: {verify}\npolling every {interval}s (background, max {expires}s)",
+                            dc.user_code
+                        ));
+                    }
+                    Err(e) => self.push_assistant(format!(
+                        "device code request failed: {e}\n(override PLAZIR_OPENAI_DEVICE_URL if IdP path differs)"
+                    )),
+                }
             }
             #[cfg(feature = "oauth")]
             "oauth-xai" => {
@@ -183,8 +227,11 @@ impl App {
                         client_id: client_id.clone(),
                     },
                 });
+                let open_note = auth::open_url_best_effort(&url)
+                    .map(|_| "browser launch attempted".to_string())
+                    .unwrap_or_else(|e| format!("browser open skipped ({e})"));
                 self.push_assistant(format!(
-                    "xAI browser PKCE started (token host auth.x.ai; override PLAZIR_XAI_TOKEN_URL).\n1) open:\n{url}\n2) /oauth-wait or /oauth-code\nstate={state}"
+                    "xAI browser PKCE started ({open_note}; token host auth.x.ai; override PLAZIR_XAI_TOKEN_URL).\n1) open:\n{url}\n2) /oauth-wait or /oauth-code\nstate={state}"
                 ));
             }
             #[cfg(feature = "oauth")]
@@ -419,6 +466,36 @@ impl App {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.oauth_listen_rx = None;
                 self.push_assistant("oauth-wait: listener dropped");
+            }
+        }
+    }
+
+    #[cfg(feature = "oauth")]
+    fn poll_oauth_device(&mut self) {
+        let Some(rx) = &self.oauth_device_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(cred)) => {
+                self.oauth_device_rx = None;
+                let _ = auth::save(ProviderId::Openai, cred.clone());
+                match provider::client_for(ProviderId::Openai, &cred) {
+                    Ok(client) => {
+                        self.provider = Some((ProviderId::Openai, client));
+                        self.refresh_status();
+                        self.push_assistant("OpenAI device OAuth connected (tokens saved)");
+                    }
+                    Err(e) => self.push_assistant(format!("client build failed: {e}")),
+                }
+            }
+            Ok(Err(e)) => {
+                self.oauth_device_rx = None;
+                self.push_assistant(format!("device OAuth failed: {e}"));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.oauth_device_rx = None;
+                self.push_assistant("device OAuth: poller dropped");
             }
         }
     }
@@ -665,7 +742,10 @@ pub fn run() -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &app))?;
         #[cfg(feature = "oauth")]
-        app.poll_oauth_listen();
+        {
+            app.poll_oauth_listen();
+            app.poll_oauth_device();
+        }
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
