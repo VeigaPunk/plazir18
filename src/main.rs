@@ -20,6 +20,8 @@ mod ui;
 mod wake;
 
 #[cfg(feature = "agent")]
+mod agent;
+#[cfg(feature = "agent")]
 mod auth;
 #[cfg(feature = "agent")]
 mod provider;
@@ -150,11 +152,17 @@ fn main() -> eframe::Result<()> {
 
     let default_w = match layout {
         LayoutMode::Strip => STRIP_WIN_W,
-        LayoutMode::Panel => PANEL_WIN_W,
+        LayoutMode::Panel => PANEL_WIN_H,
     };
     let default_h = match layout {
         LayoutMode::Strip => STRIP_WIN_H,
         LayoutMode::Panel => PANEL_WIN_H,
+    };
+
+    // fix: use PANEL_WIN_W for width
+    let default_w = match layout {
+        LayoutMode::Strip => STRIP_WIN_W,
+        LayoutMode::Panel => PANEL_WIN_W,
     };
 
     let w = if win_state.w > 0 {
