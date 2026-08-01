@@ -142,11 +142,11 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /tools /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /tools /mode /session /sessions /open <id> /delete <id> /title /export /import /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
-            "/help /clear /connect /models /model <id> /tools /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
+            "/help /clear /connect /models /model <id> /tools /mode /session /sessions /open <id> /delete <id> /title /export /import /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
         }
     }
 
@@ -541,6 +541,72 @@ impl App {
                 self.messages.retain(|m| m.role == "system");
                 self.refresh_status();
                 self.push_assistant(format!("new session {}", self.session.id));
+            }
+            "title" => {
+                if arg.is_empty() {
+                    self.push_assistant(format!(
+                        "title: {} \u{2014} usage: /title <new name>",
+                        self.session.title
+                    ));
+                } else {
+                    self.session.title = arg.to_string();
+                    let _ = self.persist();
+                    self.push_assistant(format!("title \u{2192} {}", self.session.title));
+                }
+            }
+            "export" => {
+                let _ = self.persist();
+                let default_json = format!("{}.json", self.session.id);
+                let path_s = if arg.is_empty() {
+                    default_json.as_str()
+                } else {
+                    arg
+                };
+                let path = std::path::Path::new(path_s);
+                let is_md = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("md"))
+                    .unwrap_or(false);
+                let res = if is_md {
+                    SessionStore::export_markdown(&self.session, path)
+                } else {
+                    SessionStore::export_json(&self.session, path)
+                };
+                match res {
+                    Ok(()) => self.push_assistant(format!("exported {}", path.display())),
+                    Err(e) => self.push_assistant(format!("export failed: {e}")),
+                }
+            }
+            "import" => {
+                if arg.is_empty() {
+                    self.push_assistant("usage: /import <path.json>  (always assigns a new id)");
+                } else {
+                    let path = std::path::Path::new(arg);
+                    match SessionStore::import_json(path, true) {
+                        Ok(s) => {
+                            let _ = self.persist();
+                            self.messages = s.messages.clone();
+                            if !self.messages.iter().any(|m| m.role == "system") {
+                                self.messages.insert(
+                                    0,
+                                    ChatMessage::text(
+                                        "system",
+                                        "You are plazir18, a minimal open coding agent (OpenCode \u{00d7} titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.",
+                                    ),
+                                );
+                            }
+                            self.session = s;
+                            self.scroll = 0;
+                            self.refresh_status();
+                            self.push_assistant(format!(
+                                "imported {} \u{2014} {}",
+                                self.session.id, self.session.title
+                            ));
+                        }
+                        Err(e) => self.push_assistant(format!("import failed: {e}")),
+                    }
+                }
             }
             "init" => match write_agents_md(".") {
                 Ok(path) => self.push_assistant(format!("wrote {path}")),

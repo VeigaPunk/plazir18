@@ -29,6 +29,33 @@ impl Session {
             updated_at: now,
         }
     }
+
+    /// Pretty JSON export (portable; includes full message history).
+    pub fn to_json_pretty(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(self).map_err(|e| e.to_string())
+    }
+
+    /// Human-readable markdown transcript (user/assistant only by default).
+    pub fn to_markdown(&self) -> String {
+        let mut out = format!("# {}\n\n`{}`\n\n", self.title, self.id);
+        for m in &self.messages {
+            if m.role == "system" {
+                continue;
+            }
+            let label = match m.role.as_str() {
+                "user" => "You",
+                "assistant" => "Assistant",
+                "tool" => "Tool",
+                other => other,
+            };
+            out.push_str(&format!("## {label}\n\n{}\n\n", m.content.trim()));
+        }
+        out
+    }
+
+    pub fn from_json(raw: &str) -> Result<Self, String> {
+        serde_json::from_str(raw).map_err(|e| e.to_string())
+    }
 }
 
 /// Unique id: `s-{secs}-{nanos}-{seq}` so same-second `Session::new` never collides.
@@ -100,6 +127,39 @@ impl SessionStore {
         let path = sessions_dir().join(format!("{id}.json"));
         let raw = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&raw).ok()
+    }
+
+    /// Write session JSON to an arbitrary path (export).
+    pub fn export_json(session: &Session, path: &std::path::Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        let pretty = session.to_json_pretty()?;
+        std::fs::write(path, pretty).map_err(|e| e.to_string())
+    }
+
+    /// Write markdown transcript to path.
+    pub fn export_markdown(session: &Session, path: &std::path::Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(path, session.to_markdown()).map_err(|e| e.to_string())
+    }
+
+    /// Import a session JSON file; keeps file id or assigns new if empty/collision requested.
+    pub fn import_json(path: &std::path::Path, new_id: bool) -> Result<Session, String> {
+        let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let mut s = Session::from_json(&raw)?;
+        if new_id || s.id.trim().is_empty() {
+            s.id = new_session_id();
+        }
+        s.updated_at = now_secs();
+        Self::save(&s)?;
+        Ok(s)
     }
 
     /// Load by exact id, else unique id prefix (for `/open s-…` short forms).
@@ -177,6 +237,38 @@ mod tests {
     }
 
     #[test]
+    fn export_json_and_markdown_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("plazir18-exp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("PLAZIR18_SESSIONS_DIR", &dir);
+        }
+        let mut s = Session::new("export-me");
+        s.messages
+            .push(crate::provider::ChatMessage::text("user", "hello export"));
+        s.messages
+            .push(crate::provider::ChatMessage::text("assistant", "hi back"));
+        let json_path = dir.join("out.json");
+        let md_path = dir.join("out.md");
+        SessionStore::export_json(&s, &json_path).unwrap();
+        SessionStore::export_markdown(&s, &md_path).unwrap();
+        let md = std::fs::read_to_string(&md_path).unwrap();
+        assert!(md.contains("hello export"));
+        assert!(md.contains("hi back"));
+        let imported = SessionStore::import_json(&json_path, true).unwrap();
+        assert_ne!(imported.id, s.id);
+        assert_eq!(imported.title, "export-me");
+        assert_eq!(imported.messages.len(), 2);
+        SessionStore::delete(&imported.id).unwrap();
+        unsafe {
+            std::env::remove_var("PLAZIR18_SESSIONS_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn load_by_prefix_exact_and_unique() {
         let _g = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("plazir18-prefix-{}", std::process::id()));
@@ -229,4 +321,37 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+    #[test]
+    fn export_import_json_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("plazir18-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("PLAZIR18_SESSIONS_DIR", &dir);
+        }
+        let mut s = Session::new("exp");
+        s.messages.push(crate::provider::ChatMessage {
+            role: "user".into(),
+            content: "hello-export".into(),
+            ..Default::default()
+        });
+        let json_path = dir.join("out.json");
+        let md_path = dir.join("out.md");
+        SessionStore::export_json(&s, &json_path).unwrap();
+        SessionStore::export_markdown(&s, &md_path).unwrap();
+        assert!(json_path.is_file());
+        assert!(md_path.is_file());
+        let md = std::fs::read_to_string(&md_path).unwrap();
+        assert!(md.contains("hello-export"));
+        let imported = SessionStore::import_json(&json_path, true).unwrap();
+        assert_ne!(imported.id, s.id);
+        assert!(imported.messages.iter().any(|m| m.content == "hello-export"));
+        SessionStore::delete(&imported.id).unwrap();
+        unsafe {
+            std::env::remove_var("PLAZIR18_SESSIONS_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
