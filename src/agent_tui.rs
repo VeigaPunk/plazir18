@@ -1,7 +1,8 @@
 //! Minimal OpenCode-style agent TUI (feature = "agent").
 //! Conversation + thin status + input. Slash commands. Zero chrome.
 
-use crate::auth::{self, AuthProvider, ProviderId};
+use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
+use crate::auth::{self, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -24,6 +25,7 @@ struct App {
     status: String,
     mode: Mode,
     provider: Option<(ProviderId, OpenAICompat)>,
+    session: Session,
     scroll: u16,
     quit: bool,
 }
@@ -35,101 +37,177 @@ impl App {
             let model = match id {
                 ProviderId::Local => "llama3.2".to_string(),
                 ProviderId::Zen => "gpt-5.1-codex".to_string(),
-                _ => "gpt-4o".to_string(),
+                ProviderId::Openai => "gpt-4o".to_string(),
+                ProviderId::Xai => "grok-3".to_string(),
             };
             OpenAICompat::from_cred(&cred, model)
                 .ok()
                 .map(|c| (id, c))
         });
+        let session = Session::new("default");
         let status = match &provider {
-            Some((id, c)) => format!("{} · {} · {}", id.as_str(), c.model, mode_str(Mode::Build)),
-            None => "no provider — /connect (set OPENCODE_ZEN_API_KEY or run local ollama)".into(),
+            Some((id, c)) => format!(
+                "{} \u00b7 {} \u00b7 {} \u00b7 {}",
+                id.as_str(),
+                c.model,
+                mode_str(Mode::Build),
+                short_id(&session.id)
+            ),
+            None => "no provider \u2014 /connect (Zen \u00b7 local \u00b7 OPENAI_API_KEY \u00b7 XAI_API_KEY)".into(),
         };
         Self {
             messages: vec![ChatMessage {
                 role: "system".into(),
-                content: "You are plazir18, a minimal open coding agent (OpenCode × titanium). Be concise. Prefer action.".into(),
+                content: "You are plazir18, a minimal open coding agent (OpenCode \u00d7 titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.".into(),
             }],
             input: String::new(),
             status,
             mode: Mode::Build,
             provider,
+            session,
             scroll: 0,
             quit: false,
         }
     }
 
     fn help_text() -> &'static str {
-        "/help  /clear  /connect  /models  /mode  /q  — type and Enter to chat. Esc or q to quit."
+        "/help /clear /connect /models /mode /session /sessions /new /init /q  \u00b7  !bash !read !ls  \u00b7  @file"
     }
 
     fn handle_slash(&mut self, cmd: &str) {
-        let cmd = cmd.trim().trim_start_matches('/');
-        match cmd {
-            "help" | "h" | "?" => {
-                self.messages.push(ChatMessage {
-                    role: "assistant".into(),
-                    content: Self::help_text().into(),
-                });
-            }
+        let parts: Vec<&str> = cmd.trim().trim_start_matches('/').splitn(2, ' ').collect();
+        let head = parts.first().copied().unwrap_or("");
+        let arg = parts.get(1).copied().unwrap_or("").trim();
+        match head {
+            "help" | "h" | "?" => self.push_assistant(Self::help_text()),
             "clear" => {
                 self.messages.retain(|m| m.role == "system");
                 self.status = "cleared".into();
             }
             "mode" | "plan" | "build" => {
-                self.mode = if self.mode == Mode::Build {
-                    Mode::Plan
-                } else {
-                    Mode::Build
+                self.mode = match head {
+                    "plan" => Mode::Plan,
+                    "build" => Mode::Build,
+                    _ if self.mode == Mode::Build => Mode::Plan,
+                    _ => Mode::Build,
                 };
                 self.refresh_status();
+                self.push_assistant(format!("mode \u2192 {}", mode_str(self.mode)));
             }
             "connect" => {
-                let providers = auth::builtin_providers();
-                for p in providers {
+                for p in auth::builtin_providers() {
                     if let Ok(cred) = p.login() {
                         let _ = auth::save(p.id(), cred.clone());
-                        if let Ok(client) = OpenAICompat::from_cred(&cred, "llama3.2") {
+                        let model = match p.id() {
+                            ProviderId::Local => "llama3.2",
+                            ProviderId::Zen => "gpt-5.1-codex",
+                            ProviderId::Openai => "gpt-4o",
+                            ProviderId::Xai => "grok-3",
+                        };
+                        if let Ok(client) = OpenAICompat::from_cred(&cred, model) {
                             self.provider = Some((p.id(), client));
                             self.refresh_status();
-                            self.messages.push(ChatMessage {
-                                role: "assistant".into(),
-                                content: format!("connected {}", p.display_name()),
-                            });
+                            self.push_assistant(format!("connected {}", p.display_name()));
                             return;
                         }
                     }
                 }
-                self.messages.push(ChatMessage {
-                    role: "assistant".into(),
-                    content: "no credentials. For Zen: export OPENCODE_ZEN_API_KEY=... (from opencode.ai/auth). For local: start ollama.".into(),
-                });
+                self.push_assistant(
+                    "no credentials.\n  Zen:   OPENCODE_ZEN_API_KEY  (opencode.ai/auth)\n  Local: ollama on :11434\n  OpenAI: OPENAI_API_KEY\n  Grok:  XAI_API_KEY",
+                );
             }
             "models" => {
                 let msg = match &self.provider {
                     Some((id, c)) => format!("active: {} / {}", id.as_str(), c.model),
                     None => "no active model".into(),
                 };
-                self.messages.push(ChatMessage {
-                    role: "assistant".into(),
-                    content: msg,
-                });
+                self.push_assistant(msg);
             }
-            "q" | "quit" => self.quit = true,
-            _ => {
-                self.messages.push(ChatMessage {
-                    role: "assistant".into(),
-                    content: format!("unknown /{cmd} — try /help"),
-                });
+            "session" => self.push_assistant(format!(
+                "session {} \u2014 {} msgs",
+                self.session.id,
+                self.messages.iter().filter(|m| m.role != "system").count()
+            )),
+            "sessions" => {
+                let list = SessionStore::list();
+                if list.is_empty() {
+                    self.push_assistant("no saved sessions");
+                } else {
+                    let lines: Vec<String> = list
+                        .iter()
+                        .take(12)
+                        .map(|s| format!("{}  {}  ({})", s.id, s.title, s.messages.len()))
+                        .collect();
+                    self.push_assistant(lines.join("\n"));
+                }
             }
+            "new" => {
+                let _ = self.persist();
+                self.session = Session::new(if arg.is_empty() { "default" } else { arg });
+                self.messages.retain(|m| m.role == "system");
+                self.refresh_status();
+                self.push_assistant(format!("new session {}", self.session.id));
+            }
+            "init" => match write_agents_md(".") {
+                Ok(path) => self.push_assistant(format!("wrote {path}")),
+                Err(e) => self.push_assistant(format!("init failed: {e}")),
+            },
+            "q" | "quit" => {
+                let _ = self.persist();
+                self.quit = true;
+            }
+            _ => self.push_assistant(format!("unknown /{head} \u2014 try /help")),
         }
+    }
+
+    fn push_assistant(&mut self, content: impl Into<String>) {
+        self.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: content.into(),
+        });
+    }
+
+    fn persist(&mut self) -> Result<(), String> {
+        self.session.messages = self.messages.clone();
+        SessionStore::save(&self.session)
     }
 
     fn refresh_status(&mut self) {
         self.status = match &self.provider {
-            Some((id, c)) => format!("{} · {} · {}", id.as_str(), c.model, mode_str(self.mode)),
-            None => "no provider — /connect".into(),
+            Some((id, c)) => format!(
+                "{} \u00b7 {} \u00b7 {} \u00b7 {}",
+                id.as_str(),
+                c.model,
+                mode_str(self.mode),
+                short_id(&self.session.id)
+            ),
+            None => "no provider \u2014 /connect".into(),
         };
+    }
+
+    fn maybe_run_inline_tool(&mut self, text: &str) -> bool {
+        let plan = self.mode == Mode::Plan;
+        if let Some(rest) = text.strip_prefix("!bash ") {
+            let r = run_tool(Tool::Bash { cmd: rest.into() }, plan);
+            self.push_assistant(format!("$ {rest}\n{}", r.output));
+            return true;
+        }
+        if let Some(rest) = text.strip_prefix("!read ") {
+            let r = run_tool(Tool::Read { path: rest.into() }, plan);
+            self.push_assistant(format!("read {rest}:\n{}", r.output));
+            return true;
+        }
+        if let Some(rest) = text.strip_prefix("!ls ") {
+            let r = run_tool(Tool::List { path: rest.into() }, plan);
+            self.push_assistant(r.output);
+            return true;
+        }
+        if text == "!ls" {
+            let r = run_tool(Tool::List { path: ".".into() }, plan);
+            self.push_assistant(r.output);
+            return true;
+        }
+        false
     }
 
     fn send(&mut self) {
@@ -142,31 +220,24 @@ impl App {
             self.handle_slash(&text);
             return;
         }
+        if self.maybe_run_inline_tool(&text) {
+            let _ = self.persist();
+            return;
+        }
+        let expanded = expand_at_files(&text);
         self.messages.push(ChatMessage {
             role: "user".into(),
-            content: text,
+            content: expanded,
         });
         let Some((_, client)) = &self.provider else {
-            self.messages.push(ChatMessage {
-                role: "assistant".into(),
-                content: "not connected. /connect first.".into(),
-            });
+            self.push_assistant("not connected. /connect first.");
             return;
         };
         match client.chat(&self.messages) {
-            Ok(reply) => {
-                self.messages.push(ChatMessage {
-                    role: "assistant".into(),
-                    content: reply,
-                });
-            }
-            Err(e) => {
-                self.messages.push(ChatMessage {
-                    role: "assistant".into(),
-                    content: format!("error: {e}"),
-                });
-            }
+            Ok(reply) => self.push_assistant(reply),
+            Err(e) => self.push_assistant(format!("error: {e}")),
         }
+        let _ = self.persist();
     }
 }
 
@@ -175,6 +246,10 @@ fn mode_str(m: Mode) -> &'static str {
         Mode::Build => "build",
         Mode::Plan => "plan",
     }
+}
+
+fn short_id(id: &str) -> &str {
+    &id[..id.len().min(12)]
 }
 
 fn ui(f: &mut Frame, app: &App) {
@@ -230,6 +305,7 @@ pub fn run() -> io::Result<()> {
                 }
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') if app.input.is_empty() => {
+                        let _ = app.persist();
                         app.quit = true;
                     }
                     KeyCode::Enter => app.send(),
