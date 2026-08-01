@@ -22,6 +22,12 @@ pub enum Tool {
         path: String,
         content: String,
     },
+    /// Replace first occurrence of `old` with `new` in file (`!edit path:old=>new`).
+    Edit {
+        path: String,
+        old: String,
+        new: String,
+    },
     List {
         path: String,
     },
@@ -160,6 +166,45 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
                 },
             }
         }
+        Tool::Edit { path, old, new } => {
+            if plan_mode {
+                return ToolResult {
+                    ok: false,
+                    output: "plan mode: edit disabled".into(),
+                };
+            }
+            if old.is_empty() {
+                return ToolResult {
+                    ok: false,
+                    output: "edit: empty search string".into(),
+                };
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(body) => {
+                    if !body.contains(&old) {
+                        return ToolResult {
+                            ok: false,
+                            output: format!("edit: pattern not found in {path}"),
+                        };
+                    }
+                    let updated = body.replacen(&old, &new, 1);
+                    match std::fs::write(&path, updated) {
+                        Ok(()) => ToolResult {
+                            ok: true,
+                            output: format!("edited {path} (1 replacement)"),
+                        },
+                        Err(e) => ToolResult {
+                            ok: false,
+                            output: e.to_string(),
+                        },
+                    }
+                }
+                Err(e) => ToolResult {
+                    ok: false,
+                    output: e.to_string(),
+                },
+            }
+        }
         Tool::List { path } => {
             let p = if path.is_empty() { "." } else { &path };
             match std::fs::read_dir(p) {
@@ -290,6 +335,35 @@ mod tests {
             Tool::Write {
                 path: path_s,
                 content: "no".into(),
+            },
+            true,
+        );
+        assert!(!blocked.ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_tool_replaces_first_only() {
+        let dir = std::env::temp_dir().join(format!("plazir18-edit-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("e.txt");
+        std::fs::write(&path, "aa bb aa").unwrap();
+        let path_s = path.to_string_lossy().to_string();
+        let r = run_tool(
+            Tool::Edit {
+                path: path_s.clone(),
+                old: "aa".into(),
+                new: "XX".into(),
+            },
+            false,
+        );
+        assert!(r.ok, "{}", r.output);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "XX bb aa");
+        let blocked = run_tool(
+            Tool::Edit {
+                path: path_s,
+                old: "bb".into(),
+                new: "YY".into(),
             },
             true,
         );

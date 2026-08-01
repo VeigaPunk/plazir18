@@ -111,11 +111,11 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
-            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
+            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !ls  \u{00b7}  @file"
         }
     }
 
@@ -672,6 +672,26 @@ impl App {
                 return true;
             }
             self.push_assistant("usage: !write path:content");
+            return true;
+        }
+        // !edit path:old=>new  (first occurrence only)
+        if let Some(rest) = text.strip_prefix("!edit ") {
+            let rest = rest.trim();
+            if let Some((path, rest)) = rest.split_once(':')
+                && let Some((old, new)) = rest.split_once("=>")
+            {
+                let r = run_tool(
+                    Tool::Edit {
+                        path: path.trim().into(),
+                        old: old.to_string(),
+                        new: new.to_string(),
+                    },
+                    plan,
+                );
+                self.push_assistant(format!("edit {}:\n{}", path.trim(), r.output));
+                return true;
+            }
+            self.push_assistant("usage: !edit path:old=>new");
             return true;
         }
         if let Some(rest) = text.strip_prefix("!ls ") {
