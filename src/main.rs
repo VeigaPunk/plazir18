@@ -1,11 +1,11 @@
-//! Agent Wall — tmux session dashboard. Entry point + channel wiring.
+//! Agent Wall — tmux session dashboard + optional minimal agent TUI.
 //! The poll loop lives in `poller.rs`; its event source in `wake.rs`.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use eframe::egui;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 mod ipc;
 mod launch;
@@ -18,6 +18,13 @@ mod tmux;
 mod tui;
 mod ui;
 mod wake;
+
+#[cfg(feature = "agent")]
+mod auth;
+#[cfg(feature = "agent")]
+mod provider;
+#[cfg(feature = "agent")]
+mod agent_tui;
 
 use persist::WinState;
 use theme::{
@@ -76,7 +83,22 @@ fn main() -> eframe::Result<()> {
         std::process::exit(0);
     }
 
-    // --tui: launch the ratatui dashboard. Must stay above the single-instance
+    // --agent: minimal coding-agent TUI (OpenCode × titanium). Feature-gated.
+    #[cfg(feature = "agent")]
+    if std::env::args().any(|a| a == "--agent") {
+        if let Err(e) = agent_tui::run() {
+            eprintln!("plazir18 --agent failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    #[cfg(not(feature = "agent"))]
+    if std::env::args().any(|a| a == "--agent") {
+        eprintln!("rebuild with --features agent to enable the coding-agent TUI");
+        std::process::exit(2);
+    }
+
+    // --tui: launch the ratatui wall dashboard. Must stay above the single-instance
     // guard — the TUI must be runnable while the egui GUI is also running.
     if std::env::args().any(|a| a == "--tui") {
         if let Err(e) = tui::run() {
