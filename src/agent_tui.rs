@@ -69,7 +69,7 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
@@ -130,8 +130,27 @@ impl App {
                     auth::openai_browser_oauth_start(auth::OPENAI_LOOPBACK_REDIRECT);
                 self.oauth_pending = Some((verifier, state.clone()));
                 self.push_assistant(format!(
-                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2a) /oauth-wait  (listens on 127.0.0.1:1455 up to 180s)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI host: {}",
+                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2a) /oauth-wait  (listens on 127.0.0.1:1455 up to 180s)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI: /oauth-xai if PLAZIR_XAI_OAUTH_CLIENT_ID set (host {})",
                     auth::xai_authorize_url_hint()
+                ));
+            }
+            #[cfg(feature = "oauth")]
+            "oauth-xai" => {
+                let Some(client_id) = std::env::var("PLAZIR_XAI_OAUTH_CLIENT_ID")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                else {
+                    self.push_assistant(
+                        "set PLAZIR_XAI_OAUTH_CLIENT_ID for Grok browser PKCE (M11 partial)",
+                    );
+                    return;
+                };
+                let (url, verifier, state) =
+                    auth::xai_browser_oauth_start(&client_id, auth::OPENAI_LOOPBACK_REDIRECT);
+                self.oauth_pending = Some((verifier, state.clone()));
+                self.push_assistant(format!(
+                    "xAI browser PKCE started (token exchange still OpenAI endpoint \u{2014} M11).\n1) open:\n{url}\n2) /oauth-wait or /oauth-code\nstate={state}"
                 ));
             }
             #[cfg(feature = "oauth")]

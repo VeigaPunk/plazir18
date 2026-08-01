@@ -23,7 +23,7 @@ pub use loopback::{LOOPBACK_ADDR, bind_addr_from_redirect, wait_for_oauth_callba
 #[cfg(feature = "oauth")]
 pub use openai::{
     OPENAI_LOOPBACK_REDIRECT, openai_browser_oauth_start, openai_exchange_code,
-    openai_refresh_access_token, xai_authorize_url_hint,
+    openai_refresh_access_token, xai_authorize_url_hint, xai_browser_oauth_start,
 };
 
 use serde::{Deserialize, Serialize};

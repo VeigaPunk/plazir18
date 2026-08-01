@@ -87,10 +87,27 @@ pub fn openai_browser_oauth_start(redirect_uri: &str) -> (String, String, String
     (url, verifier, state)
 }
 
-/// xAI authorize URL scaffold (query incomplete until client_id lands).
+/// xAI authorize host constant (full URL when client_id is known).
 #[cfg(feature = "oauth")]
 pub fn xai_authorize_url_hint() -> &'static str {
     super::pkce::XAI_AUTHORIZE_URL
+}
+
+/// Start xAI browser PKCE when `PLAZIR_XAI_OAUTH_CLIENT_ID` is set.
+/// Returns (authorize_url, code_verifier, state).
+#[cfg(feature = "oauth")]
+pub fn xai_browser_oauth_start(client_id: &str, redirect_uri: &str) -> (String, String, String) {
+    let verifier = super::pkce::generate_code_verifier();
+    let challenge = super::pkce::code_challenge_s256(&verifier);
+    let state = super::pkce::generate_state();
+    let url = super::pkce::xai_authorize_url(
+        client_id,
+        redirect_uri,
+        &state,
+        &challenge,
+        "openid offline_access",
+    );
+    (url, verifier, state)
 }
 
 /// POST authorization_code → tokens (network). Used by `/oauth-code`.

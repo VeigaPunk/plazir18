@@ -15,7 +15,7 @@
 | M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>`; `/delete <id>`) | |
 | M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` timeout; `!write path:content`; unit-tested) | |
 | M10 | ChatGPT device-code OAuth | partial (PKCE; exchange; `/oauth` `/oauth-code` `/oauth-wait` loopback :1455; no device-code grant yet) | |
-| M11 | Grok PKCE OAuth | partial (PKCE shared; authorize URL builder; network exchange still OpenAI-first) | |
+| M11 | Grok PKCE OAuth | partial (`/oauth-xai` + `PLAZIR_XAI_OAUTH_CLIENT_ID`; authorize URL; exchange still OpenAI token host) | |
 | M12 | `/init` AGENTS.md + `@file` + README polish | partial (helpers + README dual-mode env table) | |
 
 ## Acceptance
