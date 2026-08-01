@@ -520,6 +520,12 @@ fn event_loop(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 /// Run the dashboard, owning the terminal for the whole call: raw mode and the
 /// alternate screen are entered here and always left here, including on error.
 pub fn run() -> std::io::Result<()> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return Err(std::io::Error::other(
+            "wall TUI requires a TTY (stdin is not a terminal)",
+        ));
+    }
     install_panic_hook();
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal);

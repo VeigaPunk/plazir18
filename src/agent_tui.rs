@@ -121,7 +121,7 @@ impl App {
                     }
                 }
                 self.push_assistant(
-                    "no credentials.\n  Zen:   OPENCODE_ZEN_API_KEY  (opencode.ai/auth)\n  Local: ollama on :11434\n  OpenAI: OPENAI_API_KEY\n  Grok:  XAI_API_KEY",
+                    "no credentials.\n  Zen:   OPENCODE_ZEN_API_KEY / PLAZIR_ZEN_KEY  (opencode.ai/auth)\n  Local: PLAZIR_LOCAL_BASE / PLAZIR_LOCAL_KEY (default :11434); PLAZIR_LOCAL=prefer; loopback OPENAI_BASE_URL handed to Local\n  OpenAI: OPENAI_API_KEY (+ remote OPENAI_BASE_URL)\n  Grok:  XAI_API_KEY / GROK_API_KEY",
                 );
             }
             "models" => {
