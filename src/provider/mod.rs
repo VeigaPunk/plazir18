@@ -119,6 +119,7 @@ impl ProviderError {
     }
 }
 
+#[derive(Clone)]
 pub struct OpenAICompat {
     pub base_url: String,
     pub api_key: Option<String>,

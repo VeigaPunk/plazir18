@@ -39,6 +39,12 @@ struct OAuthPending {
     kind: OAuthPendingKind,
 }
 
+/// Background SSE stream events for live TUI token paint.
+enum StreamEvt {
+    Delta(String),
+    Done(Result<String, String>),
+}
+
 struct App {
     messages: Vec<ChatMessage>,
     input: String,
@@ -48,6 +54,9 @@ struct App {
     session: Session,
     scroll: u16,
     quit: bool,
+    /// Index of the assistant bubble currently receiving stream deltas.
+    stream_msg_idx: Option<usize>,
+    stream_rx: Option<std::sync::mpsc::Receiver<StreamEvt>>,
     /// Pending browser PKCE (feature oauth).
     #[cfg(feature = "oauth")]
     oauth_pending: Option<OAuthPending>,
@@ -109,6 +118,8 @@ impl App {
             session,
             scroll: 0,
             quit: false,
+            stream_msg_idx: None,
+            stream_rx: None,
             #[cfg(feature = "oauth")]
             oauth_pending: None,
             #[cfg(feature = "oauth")]
@@ -116,6 +127,10 @@ impl App {
             #[cfg(feature = "oauth")]
             oauth_device_rx: None,
         }
+    }
+
+    fn is_streaming(&self) -> bool {
+        self.stream_rx.is_some()
     }
 
     fn help_text() -> &'static str {
@@ -766,6 +781,10 @@ impl App {
     }
 
     fn send(&mut self) {
+        if self.is_streaming() {
+            self.status = "busy: streaming…".into();
+            return;
+        }
         let text = self.input.trim().to_string();
         if text.is_empty() {
             return;
@@ -828,37 +847,136 @@ impl App {
                 }
                 Err(e) => self.push_assistant(format!("error: {e}")),
             }
-        } else {
-            let first = client.chat(&req);
-            let result = match first {
-                Ok(reply) => Ok(reply),
-                Err(e) if e.is_unauthorized() => {
-                    // One-shot OAuth refresh + retry (OpenAI/xAI; needs refresh_token in store).
-                    if self.try_refresh_active_provider(id) {
-                        if let Some((_, client)) = &self.provider {
-                            client.chat(&req)
-                        } else {
-                            Err(e)
-                        }
+            let _ = self.persist();
+            return;
+        }
+
+        // Prefer live TUI stream when PLAZIR_CHAT_STREAM is set (non-tool path).
+        if provider::chat_stream_preferred() {
+            self.start_stream_chat(req, expanded, id, client.clone());
+            return;
+        }
+
+        let first = client.chat(&req);
+        let result = match first {
+            Ok(reply) => Ok(reply),
+            Err(e) if e.is_unauthorized() => {
+                if self.try_refresh_active_provider(id) {
+                    if let Some((_, client)) = &self.provider {
+                        client.chat(&req)
                     } else {
                         Err(e)
                     }
+                } else {
+                    Err(e)
                 }
-                Err(e) => Err(e),
-            };
-            match result {
-                Ok(reply) => apply_chat_turn(&mut self.messages, expanded, reply),
-                Err(e) => {
-                    self.messages.push(ChatMessage {
-                        role: "user".into(),
-                        content: expanded,
-                        ..Default::default()
-                    });
-                    self.push_assistant(format!("error: {e}"));
-                }
+            }
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(reply) => apply_chat_turn(&mut self.messages, expanded, reply),
+            Err(e) => {
+                self.messages.push(ChatMessage {
+                    role: "user".into(),
+                    content: expanded,
+                    ..Default::default()
+                });
+                self.push_assistant(format!("error: {e}"));
             }
         }
         let _ = self.persist();
+    }
+
+    /// Background SSE: paint tokens into an assistant bubble each event-loop tick.
+    fn start_stream_chat(
+        &mut self,
+        req: Vec<ChatMessage>,
+        expanded: String,
+        id: ProviderId,
+        client: OpenAICompat,
+    ) {
+        self.messages.push(ChatMessage {
+            role: "user".into(),
+            content: expanded,
+            ..Default::default()
+        });
+        self.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            ..Default::default()
+        });
+        self.stream_msg_idx = Some(self.messages.len() - 1);
+        self.status = format!("streaming \u{00b7} {}", id.as_str());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.stream_rx = Some(rx);
+        std::thread::spawn(move || {
+            let r = client.chat_stream_for_each(&req, |delta| {
+                let _ = tx.send(StreamEvt::Delta(delta.to_string()));
+            });
+            let done = match r {
+                Ok(full) => StreamEvt::Done(Ok(full)),
+                Err(e) => StreamEvt::Done(Err(e.to_string())),
+            };
+            let _ = tx.send(done);
+        });
+    }
+
+    fn poll_stream(&mut self) {
+        let Some(rx) = &self.stream_rx else {
+            return;
+        };
+        // Drain available deltas without blocking.
+        loop {
+            match rx.try_recv() {
+                Ok(StreamEvt::Delta(d)) => {
+                    if let Some(i) = self.stream_msg_idx
+                        && let Some(m) = self.messages.get_mut(i)
+                    {
+                        m.content.push_str(&d);
+                    }
+                }
+                Ok(StreamEvt::Done(Ok(full))) => {
+                    if let Some(i) = self.stream_msg_idx
+                        && let Some(m) = self.messages.get_mut(i)
+                    {
+                        // Prefer full assembled text if deltas were incomplete.
+                        if m.content.is_empty() && !full.is_empty() {
+                            m.content = full;
+                        }
+                    }
+                    self.stream_rx = None;
+                    self.stream_msg_idx = None;
+                    self.refresh_status();
+                    let _ = self.persist();
+                    break;
+                }
+                Ok(StreamEvt::Done(Err(e))) => {
+                    if let Some(i) = self.stream_msg_idx
+                        && let Some(m) = self.messages.get_mut(i)
+                    {
+                        if m.content.is_empty() {
+                            m.content = format!("error: {e}");
+                        } else {
+                            m.content.push_str(&format!("\nerror: {e}"));
+                        }
+                    } else {
+                        self.push_assistant(format!("error: {e}"));
+                    }
+                    self.stream_rx = None;
+                    self.stream_msg_idx = None;
+                    self.refresh_status();
+                    let _ = self.persist();
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.stream_rx = None;
+                    self.stream_msg_idx = None;
+                    self.refresh_status();
+                    break;
+                }
+            }
+        }
     }
 
     /// Refresh stored tokens for the active cloud provider; update client. Returns true if refreshed.
@@ -1080,25 +1198,34 @@ pub fn run() -> io::Result<()> {
     let mut app = App::new();
     loop {
         terminal.draw(|f| ui(f, &app))?;
+        app.poll_stream();
         #[cfg(feature = "oauth")]
         {
             app.poll_oauth_listen();
             app.poll_oauth_device();
         }
-        if event::poll(Duration::from_millis(100))?
+        // Faster tick while streaming so tokens appear promptly.
+        let tick = if app.is_streaming() {
+            Duration::from_millis(33)
+        } else {
+            Duration::from_millis(100)
+        };
+        if event::poll(tick)?
             && let Event::Key(key) = event::read()?
         {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') if app.input.is_empty() => {
+                KeyCode::Esc | KeyCode::Char('q')
+                    if app.input.is_empty() && !app.is_streaming() =>
+                {
                     let _ = app.persist();
                     app.quit = true;
                 }
                 KeyCode::Enter => app.send(),
-                KeyCode::Char(c) => app.input.push(c),
-                KeyCode::Backspace => {
+                KeyCode::Char(c) if !app.is_streaming() => app.input.push(c),
+                KeyCode::Backspace if !app.is_streaming() => {
                     app.input.pop();
                 }
                 KeyCode::Up => app.scroll = app.scroll.saturating_add(1),
