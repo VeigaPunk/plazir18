@@ -5,8 +5,17 @@ use crate::provider::{
     AssistantTurn, ChatMessage, OpenAICompat, ProviderError, ToolCall, builtin_tool_defs,
 };
 
-/// Max model↔tool rounds per user turn (prevents infinite loops).
+/// Default max model↔tool rounds per user turn (prevents infinite loops).
 pub const MAX_TOOL_ROUNDS: usize = 6;
+
+/// Max rounds: `PLAZIR_TOOL_LOOP_MAX` (1–16) or [`MAX_TOOL_ROUNDS`].
+pub fn max_tool_rounds() -> usize {
+    std::env::var("PLAZIR_TOOL_LOOP_MAX")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .map(|n| n.clamp(1, 16))
+        .unwrap_or(MAX_TOOL_ROUNDS)
+}
 
 /// Tool-loop policy from env + provider.
 /// - `PLAZIR_TOOL_LOOP=1|true|yes|on` → always on  
@@ -126,7 +135,8 @@ pub fn run_tool_loop(
 ) -> Result<(String, Vec<String>), ProviderError> {
     let tools = builtin_tool_defs();
     let mut log = Vec::new();
-    for _ in 0..MAX_TOOL_ROUNDS {
+    let max = max_tool_rounds();
+    for _ in 0..max {
         let turn = client.chat_turn(messages, Some(&tools))?;
         if turn.tool_calls.is_empty() {
             if turn.content.is_empty() {
@@ -142,7 +152,7 @@ pub fn run_tool_loop(
     if final_turn.content.is_empty() {
         Ok((
             format!(
-                "(tool loop hit {MAX_TOOL_ROUNDS} rounds; no final text)\n{}",
+                "(tool loop hit {max} rounds; no final text)\n{}",
                 log.join("\n")
             ),
             log,

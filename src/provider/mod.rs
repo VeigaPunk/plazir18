@@ -201,6 +201,16 @@ impl OpenAICompat {
 
     /// Streaming chat (SSE). Accumulates `delta.content` into a full reply.
     pub fn chat_stream(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
+        self.chat_stream_for_each(messages, |_| {})
+    }
+
+    /// Line-by-line SSE stream; invokes `on_delta` for each content piece as it arrives.
+    pub fn chat_stream_for_each(
+        &self,
+        messages: &[ChatMessage],
+        mut on_delta: impl FnMut(&str),
+    ) -> Result<String, ProviderError> {
+        use std::io::{BufRead, BufReader};
         let url = format!("{}/chat/completions", self.base_url);
         let body = ChatRequest {
             model: self.model.clone(),
@@ -223,10 +233,45 @@ impl OpenAICompat {
             let text = resp.text().unwrap_or_default();
             return Err(ProviderError::Http(format!("{status}: {text}")));
         }
-        let text = resp
-            .text()
-            .map_err(|e| ProviderError::Other(e.to_string()))?;
-        accumulate_sse_chat_body(&text)
+        let mut out = String::new();
+        let mut reader = BufReader::new(resp);
+        let mut line = String::new();
+        let mut raw_fallback = String::new();
+        loop {
+            line.clear();
+            let n = reader
+                .read_line(&mut line)
+                .map_err(|e| ProviderError::Other(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            raw_fallback.push_str(&line);
+            let trimmed = line.trim();
+            let Some(payload) = trimmed.strip_prefix("data:") else {
+                continue;
+            };
+            if let Some(piece) = parse_sse_data_payload(payload) {
+                on_delta(&piece);
+                out.push_str(&piece);
+            }
+        }
+        if out.is_empty() {
+            // Retry pure accumulator (same buffer) then non-SSE JSON.
+            if let Ok(s) = accumulate_sse_chat_body(&raw_fallback) {
+                if !s.is_empty() {
+                    on_delta(&s);
+                    return Ok(s);
+                }
+            }
+            if let Ok(s) = parse_chat_completion_body(&raw_fallback) {
+                if !s.is_empty() {
+                    on_delta(&s);
+                }
+                return Ok(s);
+            }
+            return Err(ProviderError::Empty);
+        }
+        Ok(out)
     }
 
     /// GET `{base}/models` (OpenAI-compatible catalog). Short timeout for connect path.

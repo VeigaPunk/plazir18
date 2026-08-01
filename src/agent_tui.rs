@@ -433,8 +433,10 @@ impl App {
                 let id = self.provider.as_ref().map(|(i, _)| *i);
                 let on = tool_loop_enabled_for(id);
                 let env = std::env::var("PLAZIR_TOOL_LOOP").unwrap_or_else(|_| "(unset)".into());
+                let max = crate::agent::tool_loop::max_tool_rounds();
+                let stream = provider::chat_stream_preferred();
                 self.push_assistant(format!(
-                    "tool loop: {} for provider {}\nPLAZIR_TOOL_LOOP={env}\ndefault: Local=on, cloud=off unless env forces\ntools: bash read_file write_file list_dir edit_file",
+                    "tool loop: {} for provider {}\nPLAZIR_TOOL_LOOP={env}\nmax rounds: {max} (PLAZIR_TOOL_LOOP_MAX)\nstream preferred: {stream} (PLAZIR_CHAT_STREAM)\ndefault: Local=on, cloud=off unless env forces\ntools: bash read_file write_file list_dir edit_file",
                     if on { "ON" } else { "OFF" },
                     id.map(|i| i.as_str()).unwrap_or("none")
                 ));
@@ -1016,9 +1018,25 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
         ChatMessage::text("user", expand_at_files(prompt)),
     ];
     let use_tools = tool_loop_enabled_for(Some(id));
+    let progressive = provider::chat_stream_preferred() && !use_tools;
     let chat_once = |c: &OpenAICompat, msgs: &mut Vec<ChatMessage>| {
         if use_tools {
             run_tool_loop(c, msgs, false).map(|(r, _)| r)
+        } else if progressive {
+            // Live token paint to stdout (line-by-line SSE).
+            use std::io::Write;
+            let mut first = true;
+            let r = c.chat_stream_for_each(msgs, |delta| {
+                if first {
+                    first = false;
+                }
+                let _ = write!(std::io::stdout(), "{delta}");
+                let _ = std::io::stdout().flush();
+            });
+            if r.is_ok() {
+                let _ = writeln!(std::io::stdout());
+            }
+            r
         } else {
             c.chat(msgs)
         }
@@ -1044,7 +1062,9 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
         }
         Err(e) => return Err(io::Error::other(e.to_string())),
     };
-    println!("{reply}");
+    if !progressive {
+        println!("{reply}");
+    }
     Ok(())
 }
 
