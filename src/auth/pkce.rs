@@ -92,6 +92,9 @@ pub const XAI_AUTHORIZE_URL: &str = "https://accounts.x.ai/oauth/authorize";
 /// OpenAI token endpoint for authorization-code + PKCE exchange.
 pub const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 
+/// Default xAI token endpoint (override with `PLAZIR_XAI_TOKEN_URL`).
+pub const XAI_TOKEN_URL: &str = "https://auth.x.ai/oauth/token";
+
 /// Build a PKCE authorize URL against the xAI host (client_id supplied by caller).
 pub fn xai_authorize_url(
     client_id: &str,
@@ -112,23 +115,37 @@ pub fn xai_authorize_url(
 }
 
 /// application/x-www-form-urlencoded body for code→token exchange (PKCE).
-pub fn openai_token_exchange_body(code: &str, redirect_uri: &str, code_verifier: &str) -> String {
+pub fn oauth_token_exchange_body(
+    client_id: &str,
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> String {
     let mut body = String::new();
     push_q(&mut body, "grant_type", "authorization_code");
-    push_q(&mut body, "client_id", OPENAI_OAUTH_CLIENT_ID);
+    push_q(&mut body, "client_id", client_id);
     push_q(&mut body, "code", code);
     push_q(&mut body, "redirect_uri", redirect_uri);
     push_q(&mut body, "code_verifier", code_verifier);
     body
 }
 
+/// OpenAI client_id shorthand.
+pub fn openai_token_exchange_body(code: &str, redirect_uri: &str, code_verifier: &str) -> String {
+    oauth_token_exchange_body(OPENAI_OAUTH_CLIENT_ID, code, redirect_uri, code_verifier)
+}
+
 /// Refresh-token grant body (no browser).
-pub fn openai_refresh_body(refresh_token: &str) -> String {
+pub fn oauth_refresh_body(client_id: &str, refresh_token: &str) -> String {
     let mut body = String::new();
     push_q(&mut body, "grant_type", "refresh_token");
-    push_q(&mut body, "client_id", OPENAI_OAUTH_CLIENT_ID);
+    push_q(&mut body, "client_id", client_id);
     push_q(&mut body, "refresh_token", refresh_token);
     body
+}
+
+pub fn openai_refresh_body(refresh_token: &str) -> String {
+    oauth_refresh_body(OPENAI_OAUTH_CLIENT_ID, refresh_token)
 }
 
 /// Parse `code` + `state` from a callback URL or raw query string.
@@ -211,8 +228,11 @@ pub fn parse_oauth_token_json(body: &str) -> Result<OAuthTokenJson, String> {
     serde_json::from_str(body).map_err(|e| e.to_string())
 }
 
-/// Map token JSON → [`crate::auth::Credential`] for OpenAI cloud base.
-pub fn credential_from_oauth_tokens(tokens: &OAuthTokenJson) -> crate::auth::Credential {
+/// Map token JSON → [`crate::auth::Credential`] with provider API base.
+pub fn credential_from_oauth_tokens(
+    tokens: &OAuthTokenJson,
+    api_base: &str,
+) -> crate::auth::Credential {
     let expires_at = tokens.expires_in.map(|secs| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -223,7 +243,7 @@ pub fn credential_from_oauth_tokens(tokens: &OAuthTokenJson) -> crate::auth::Cre
         access_token: Some(tokens.access_token.clone()),
         refresh_token: tokens.refresh_token.clone(),
         expires_at,
-        base_url: Some("https://api.openai.com/v1".into()),
+        base_url: Some(api_base.trim_end_matches('/').to_string()),
         ..Default::default()
     }
 }
@@ -324,7 +344,7 @@ mod tests {
         let raw =
             r#"{"access_token":"at","refresh_token":"rt","expires_in":3600,"token_type":"Bearer"}"#;
         let t = parse_oauth_token_json(raw).unwrap();
-        let cred = credential_from_oauth_tokens(&t);
+        let cred = credential_from_oauth_tokens(&t, "https://api.openai.com/v1");
         assert_eq!(cred.access_token.as_deref(), Some("at"));
         assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
         assert!(cred.expires_at.is_some());

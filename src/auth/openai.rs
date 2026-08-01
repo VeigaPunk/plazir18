@@ -110,20 +110,23 @@ pub fn xai_browser_oauth_start(client_id: &str, redirect_uri: &str) -> (String, 
     (url, verifier, state)
 }
 
-/// POST authorization_code → tokens (network). Used by `/oauth-code`.
+/// Generic authorization_code → tokens POST.
 #[cfg(feature = "oauth")]
-pub fn openai_exchange_code(
+pub fn oauth_exchange_code(
+    token_url: &str,
+    client_id: &str,
     code: &str,
     redirect_uri: &str,
     code_verifier: &str,
+    api_base: &str,
 ) -> Result<super::Credential, String> {
-    let body = super::pkce::openai_token_exchange_body(code, redirect_uri, code_verifier);
+    let body = super::pkce::oauth_token_exchange_body(client_id, code, redirect_uri, code_verifier);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
-        .post(super::pkce::OPENAI_TOKEN_URL)
+        .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -134,7 +137,47 @@ pub fn openai_exchange_code(
         return Err(format!("token exchange {status}: {text}"));
     }
     let tokens = super::pkce::parse_oauth_token_json(&text)?;
-    Ok(super::pkce::credential_from_oauth_tokens(&tokens))
+    Ok(super::pkce::credential_from_oauth_tokens(&tokens, api_base))
+}
+
+/// POST authorization_code → tokens (OpenAI). Used by `/oauth-code`.
+#[cfg(feature = "oauth")]
+pub fn openai_exchange_code(
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> Result<super::Credential, String> {
+    oauth_exchange_code(
+        super::pkce::OPENAI_TOKEN_URL,
+        super::pkce::OPENAI_OAUTH_CLIENT_ID,
+        code,
+        redirect_uri,
+        code_verifier,
+        "https://api.openai.com/v1",
+    )
+}
+
+/// POST authorization_code → tokens (xAI). Client id from env/start.
+#[cfg(feature = "oauth")]
+pub fn xai_exchange_code(
+    client_id: &str,
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> Result<super::Credential, String> {
+    let token_url = std::env::var("PLAZIR_XAI_TOKEN_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| super::pkce::XAI_TOKEN_URL.to_string());
+    oauth_exchange_code(
+        &token_url,
+        client_id,
+        code,
+        redirect_uri,
+        code_verifier,
+        "https://api.x.ai/v1",
+    )
 }
 
 /// POST refresh_token → tokens (network).
@@ -157,7 +200,10 @@ pub fn openai_refresh_access_token(refresh_token: &str) -> Result<super::Credent
         return Err(format!("token refresh {status}: {text}"));
     }
     let tokens = super::pkce::parse_oauth_token_json(&text)?;
-    Ok(super::pkce::credential_from_oauth_tokens(&tokens))
+    Ok(super::pkce::credential_from_oauth_tokens(
+        &tokens,
+        "https://api.openai.com/v1",
+    ))
 }
 
 #[cfg(test)]

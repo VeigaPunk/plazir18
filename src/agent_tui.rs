@@ -19,6 +19,25 @@ enum Mode {
     Plan,
 }
 
+/// Which IdP was used for the pending PKCE flow.
+#[cfg(feature = "oauth")]
+#[derive(Debug, Clone)]
+enum OAuthPendingKind {
+    Openai,
+    /// client_id required for token exchange
+    Xai {
+        client_id: String,
+    },
+}
+
+#[cfg(feature = "oauth")]
+#[derive(Clone)]
+struct OAuthPending {
+    verifier: String,
+    state: String,
+    kind: OAuthPendingKind,
+}
+
 struct App {
     messages: Vec<ChatMessage>,
     input: String,
@@ -28,9 +47,12 @@ struct App {
     session: Session,
     scroll: u16,
     quit: bool,
-    /// Pending browser PKCE: (code_verifier, state). Feature oauth only.
+    /// Pending browser PKCE (feature oauth).
     #[cfg(feature = "oauth")]
-    oauth_pending: Option<(String, String)>,
+    oauth_pending: Option<OAuthPending>,
+    /// Background loopback listener result channel.
+    #[cfg(feature = "oauth")]
+    oauth_listen_rx: Option<std::sync::mpsc::Receiver<Result<(String, String), String>>>,
 }
 
 impl App {
@@ -63,6 +85,8 @@ impl App {
             quit: false,
             #[cfg(feature = "oauth")]
             oauth_pending: None,
+            #[cfg(feature = "oauth")]
+            oauth_listen_rx: None,
         }
     }
 
@@ -128,9 +152,13 @@ impl App {
             "oauth" => {
                 let (url, verifier, state) =
                     auth::openai_browser_oauth_start(auth::OPENAI_LOOPBACK_REDIRECT);
-                self.oauth_pending = Some((verifier, state.clone()));
+                self.oauth_pending = Some(OAuthPending {
+                    verifier,
+                    state: state.clone(),
+                    kind: OAuthPendingKind::Openai,
+                });
                 self.push_assistant(format!(
-                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2a) /oauth-wait  (listens on 127.0.0.1:1455 up to 180s)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI: /oauth-xai if PLAZIR_XAI_OAUTH_CLIENT_ID set (host {})",
+                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2a) /oauth-wait  (background listen :1455, 180s; TUI stays live)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI: /oauth-xai if PLAZIR_XAI_OAUTH_CLIENT_ID set (host {})",
                     auth::xai_authorize_url_hint()
                 ));
             }
@@ -148,57 +176,40 @@ impl App {
                 };
                 let (url, verifier, state) =
                     auth::xai_browser_oauth_start(&client_id, auth::OPENAI_LOOPBACK_REDIRECT);
-                self.oauth_pending = Some((verifier, state.clone()));
+                self.oauth_pending = Some(OAuthPending {
+                    verifier,
+                    state: state.clone(),
+                    kind: OAuthPendingKind::Xai {
+                        client_id: client_id.clone(),
+                    },
+                });
                 self.push_assistant(format!(
-                    "xAI browser PKCE started (token exchange still OpenAI endpoint \u{2014} M11).\n1) open:\n{url}\n2) /oauth-wait or /oauth-code\nstate={state}"
+                    "xAI browser PKCE started (token host auth.x.ai; override PLAZIR_XAI_TOKEN_URL).\n1) open:\n{url}\n2) /oauth-wait or /oauth-code\nstate={state}"
                 ));
             }
             #[cfg(feature = "oauth")]
             "oauth-wait" => {
-                let Some((verifier, expect_state)) = self.oauth_pending.clone() else {
+                if self.oauth_pending.is_none() {
                     self.push_assistant("no pending /oauth \u{2014} run /oauth first");
                     return;
-                };
+                }
+                if self.oauth_listen_rx.is_some() {
+                    self.push_assistant("already listening \u{2014} finish browser login or wait");
+                    return;
+                }
                 let bind = auth::bind_addr_from_redirect(auth::OPENAI_LOOPBACK_REDIRECT)
                     .unwrap_or_else(|_| auth::LOOPBACK_ADDR.to_string());
+                let (tx, rx) = std::sync::mpsc::channel();
+                let bind_t = bind.clone();
+                std::thread::spawn(move || {
+                    let r =
+                        auth::wait_for_oauth_callback(&bind_t, std::time::Duration::from_secs(180));
+                    let _ = tx.send(r);
+                });
+                self.oauth_listen_rx = Some(rx);
                 self.push_assistant(format!(
-                    "listening on http://{bind}/auth/callback (180s) \u{2014} complete browser login\u{2026}"
+                    "listening on http://{bind}/auth/callback (180s, background) \u{2014} TUI stays interactive"
                 ));
-                // Blocks the TUI until callback or timeout (intentional for OAuth).
-                match auth::wait_for_oauth_callback(&bind, std::time::Duration::from_secs(180)) {
-                    Ok((code, state)) => {
-                        if state != expect_state {
-                            self.push_assistant(format!(
-                                "state mismatch (got {state}, expected {expect_state})"
-                            ));
-                            return;
-                        }
-                        match auth::openai_exchange_code(
-                            &code,
-                            auth::OPENAI_LOOPBACK_REDIRECT,
-                            &verifier,
-                        ) {
-                            Ok(cred) => {
-                                let _ = auth::save(ProviderId::Openai, cred.clone());
-                                match provider::client_for(ProviderId::Openai, &cred) {
-                                    Ok(client) => {
-                                        self.provider = Some((ProviderId::Openai, client));
-                                        self.oauth_pending = None;
-                                        self.refresh_status();
-                                        self.push_assistant(
-                                            "OpenAI OAuth connected via loopback (tokens saved)",
-                                        );
-                                    }
-                                    Err(e) => {
-                                        self.push_assistant(format!("client build failed: {e}"))
-                                    }
-                                }
-                            }
-                            Err(e) => self.push_assistant(format!("token exchange failed: {e}")),
-                        }
-                    }
-                    Err(e) => self.push_assistant(format!("oauth-wait: {e}")),
-                }
             }
             #[cfg(feature = "oauth")]
             "oauth-code" => {
@@ -207,7 +218,7 @@ impl App {
                         "usage: /oauth-code <callback-url|code> [state]  (run /oauth first)",
                     );
                 } else {
-                    let Some((verifier, expect_state)) = self.oauth_pending.clone() else {
+                    let Some(pending) = self.oauth_pending.clone() else {
                         self.push_assistant("no pending /oauth \u{2014} run /oauth first");
                         return;
                     };
@@ -226,7 +237,7 @@ impl App {
                             .next()
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
-                            .unwrap_or(expect_state.as_str())
+                            .unwrap_or(pending.state.as_str())
                             .to_string();
                         if code.is_empty() {
                             self.push_assistant("missing code");
@@ -234,33 +245,14 @@ impl App {
                         }
                         (code, state)
                     };
-                    if state != expect_state {
+                    if state != pending.state {
                         self.push_assistant(format!(
-                            "state mismatch (got {state}, expected {expect_state})"
+                            "state mismatch (got {state}, expected {})",
+                            pending.state
                         ));
                         return;
                     }
-                    match auth::openai_exchange_code(
-                        &code,
-                        auth::OPENAI_LOOPBACK_REDIRECT,
-                        &verifier,
-                    ) {
-                        Ok(cred) => {
-                            let _ = auth::save(ProviderId::Openai, cred.clone());
-                            match provider::client_for(ProviderId::Openai, &cred) {
-                                Ok(client) => {
-                                    self.provider = Some((ProviderId::Openai, client));
-                                    self.oauth_pending = None;
-                                    self.refresh_status();
-                                    self.push_assistant(
-                                        "OpenAI OAuth connected (tokens saved to auth store)",
-                                    );
-                                }
-                                Err(e) => self.push_assistant(format!("client build failed: {e}")),
-                            }
-                        }
-                        Err(e) => self.push_assistant(format!("token exchange failed: {e}")),
-                    }
+                    self.finish_oauth_exchange(&code, &pending);
                 }
             }
             #[cfg(feature = "oauth")]
@@ -395,6 +387,77 @@ impl App {
             role: "assistant".into(),
             content: content.into(),
         });
+    }
+
+    /// Non-blocking: complete background `/oauth-wait` when the listener reports.
+    #[cfg(feature = "oauth")]
+    fn poll_oauth_listen(&mut self) {
+        let Some(rx) = &self.oauth_listen_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok((code, state))) => {
+                self.oauth_listen_rx = None;
+                let Some(pending) = self.oauth_pending.clone() else {
+                    self.push_assistant("callback received but no pending /oauth");
+                    return;
+                };
+                if state != pending.state {
+                    self.push_assistant(format!(
+                        "state mismatch (got {state}, expected {})",
+                        pending.state
+                    ));
+                    return;
+                }
+                self.finish_oauth_exchange(&code, &pending);
+            }
+            Ok(Err(e)) => {
+                self.oauth_listen_rx = None;
+                self.push_assistant(format!("oauth-wait: {e}"));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.oauth_listen_rx = None;
+                self.push_assistant("oauth-wait: listener dropped");
+            }
+        }
+    }
+
+    #[cfg(feature = "oauth")]
+    fn finish_oauth_exchange(&mut self, code: &str, pending: &OAuthPending) {
+        let result = match &pending.kind {
+            OAuthPendingKind::Openai => {
+                auth::openai_exchange_code(code, auth::OPENAI_LOOPBACK_REDIRECT, &pending.verifier)
+            }
+            OAuthPendingKind::Xai { client_id } => auth::xai_exchange_code(
+                client_id,
+                code,
+                auth::OPENAI_LOOPBACK_REDIRECT,
+                &pending.verifier,
+            ),
+        };
+        match result {
+            Ok(cred) => {
+                let id = match &pending.kind {
+                    OAuthPendingKind::Openai => ProviderId::Openai,
+                    OAuthPendingKind::Xai { .. } => ProviderId::Xai,
+                };
+                let _ = auth::save(id, cred.clone());
+                match provider::client_for(id, &cred) {
+                    Ok(client) => {
+                        self.provider = Some((id, client));
+                        self.oauth_pending = None;
+                        self.refresh_status();
+                        self.push_assistant(format!(
+                            "{} OAuth connected (tokens saved)",
+                            id.as_str()
+                        ));
+                    }
+                    Err(e) => self.push_assistant(format!("client build failed: {e}")),
+                }
+            }
+            Err(e) => self.push_assistant(format!("token exchange failed: {e}")),
+        }
     }
 
     fn open_session(&mut self, id_or_prefix: &str) {
@@ -601,6 +664,8 @@ pub fn run() -> io::Result<()> {
     let mut app = App::new();
     loop {
         terminal.draw(|f| ui(f, &app))?;
+        #[cfg(feature = "oauth")]
+        app.poll_oauth_listen();
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
