@@ -2,7 +2,7 @@
 //! Conversation + thin status + input. Slash commands. Zero chrome.
 
 use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
-use crate::agent::{run_tool_loop, tool_loop_enabled};
+use crate::agent::{run_tool_loop, tool_loop_enabled_for};
 use crate::auth::{self, AuthProvider, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat, apply_chat_turn};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -121,11 +121,11 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /tools /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
-            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
+            "/help /clear /connect /models /model <id> /tools /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
         }
     }
 
@@ -428,6 +428,16 @@ impl App {
                 } else {
                     self.push_assistant("not connected. /connect first.");
                 }
+            }
+            "tools" => {
+                let id = self.provider.as_ref().map(|(i, _)| *i);
+                let on = tool_loop_enabled_for(id);
+                let env = std::env::var("PLAZIR_TOOL_LOOP").unwrap_or_else(|_| "(unset)".into());
+                self.push_assistant(format!(
+                    "tool loop: {} for provider {}\nPLAZIR_TOOL_LOOP={env}\ndefault: Local=on, cloud=off unless env forces\ntools: bash read_file write_file list_dir edit_file",
+                    if on { "ON" } else { "OFF" },
+                    id.map(|i| i.as_str()).unwrap_or("none")
+                ));
             }
             "models" => {
                 let msg = match &self.provider {
@@ -788,7 +798,7 @@ impl App {
         let (id, client) = self.provider.as_ref().expect("checked");
         let id = *id;
         let plan_mode = self.mode == Mode::Plan;
-        if tool_loop_enabled() {
+        if tool_loop_enabled_for(Some(id)) {
             // Mutate history in place via tool loop (user turn already in req).
             self.messages = req;
             let loop_result = {
@@ -1005,7 +1015,7 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
         ),
         ChatMessage::text("user", expand_at_files(prompt)),
     ];
-    let use_tools = tool_loop_enabled();
+    let use_tools = tool_loop_enabled_for(Some(id));
     let chat_once = |c: &OpenAICompat, msgs: &mut Vec<ChatMessage>| {
         if use_tools {
             run_tool_loop(c, msgs, false).map(|(r, _)| r)

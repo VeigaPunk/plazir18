@@ -8,14 +8,20 @@ use crate::provider::{
 /// Max model↔tool rounds per user turn (prevents infinite loops).
 pub const MAX_TOOL_ROUNDS: usize = 6;
 
-/// Enable via `PLAZIR_TOOL_LOOP=1|true|yes|on`.
-pub fn tool_loop_enabled() -> bool {
+/// Tool-loop policy from env + provider.
+/// - `PLAZIR_TOOL_LOOP=1|true|yes|on` → always on  
+/// - `PLAZIR_TOOL_LOOP=0|false|no|off` → always off  
+/// - unset → **on for Local only** (safe default for Ollama tool-capable models)
+pub fn tool_loop_enabled_for(provider: Option<crate::auth::ProviderId>) -> bool {
     match std::env::var("PLAZIR_TOOL_LOOP") {
         Ok(v) => {
             let v = v.trim().to_ascii_lowercase();
-            v == "1" || v == "true" || v == "yes" || v == "on"
+            if matches!(v.as_str(), "0" | "false" | "no" | "off") {
+                return false;
+            }
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
         }
-        Err(_) => false,
+        Err(_) => matches!(provider, Some(crate::auth::ProviderId::Local)),
     }
 }
 
@@ -150,6 +156,20 @@ pub fn run_tool_loop(
 mod tests {
     use super::*;
     use crate::provider::ToolFunction;
+
+    #[test]
+    fn tool_loop_default_local_when_env_unset() {
+        // Cannot safely mutate process env under parallel tests; assert policy pure form:
+        // with explicit env the helper is deterministic; unset path covered by match arms.
+        assert!(!tool_loop_enabled_for(None));
+        // Local default-on only when PLAZIR_TOOL_LOOP unset — if suite sets it, skip soft assert.
+        if std::env::var("PLAZIR_TOOL_LOOP").is_err() {
+            assert!(tool_loop_enabled_for(Some(crate::auth::ProviderId::Local)));
+            assert!(!tool_loop_enabled_for(Some(
+                crate::auth::ProviderId::Openai
+            )));
+        }
+    }
 
     #[test]
     fn dispatch_bash_plan_blocked() {

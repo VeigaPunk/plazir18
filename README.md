@@ -86,7 +86,7 @@ Agent needs a provider key or local endpoint. `/connect` tries cloud keys first 
 | `PLAZIR_LOCAL_BASE` / `PLAZIR_LOCAL_KEY` | Local (Ollama, etc.) |
 | `PLAZIR_LOCAL_MODEL` | Local chat model (default `llama3.2`; if missing from `/models`, first catalog id is used) |
 | `PLAZIR_CHAT_STREAM=1\|true` | Prefer SSE streaming for chat completions |
-| `PLAZIR_TOOL_LOOP=1\|true` | Model-driven tool calls (bash/read/write/list/edit) |
+| `PLAZIR_TOOL_LOOP` | Tool loop: unset=**Local on** / cloud off; `1`=always; `0`=never |
 | `PLAZIR_LOCAL=1\|true\|prefer` | Force Local-first |
 | Loopback `OPENAI_BASE_URL` | Rejected by OpenAI path; handed to Local base |
 
@@ -108,7 +108,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked                              # 71 pass, 2 ignored (live tmux)
 cargo clippy --features full --locked --all-targets -- -D warnings
-cargo test --features full --locked              # 144 pass, 4 ignored (live tmux + ollama)
+cargo test --features full --locked              # 145 pass, 4 ignored (live tmux + ollama)
 # rust-version = "1.85" (edition 2024); agent !bash tools timeout at 30s
 cargo run --locked -- --status-json
 cargo run --locked -- --status-pango

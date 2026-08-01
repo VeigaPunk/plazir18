@@ -13,7 +13,7 @@
 | M6 | E2E local chat turn | partial (`--agent-once`; SSE stream parse; 401 refresh; live Ollama ignore probes) | |
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
 | M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>`; `/delete <id>`) | |
-| M9 | Tools (bash, read) + plan/build toggle | partial (inline tools + **model tool loop** via `PLAZIR_TOOL_LOOP=1`) | |
+| M9 | Tools (bash, read) + plan/build toggle | partial (inline tools + model tool loop; **Local default on**, `/tools`) | |
 | M10 | ChatGPT device-code OAuth | partial (PKCE; loopback; `/oauth-device`; soft refresh on start; skip empty store rows) | |
 | M11 | Grok PKCE OAuth | partial (`/oauth-xai`; device; `xai_refresh_access_token`; 401 mid-chat refresh; URL overrides) | |
 | M12 | `/init` AGENTS.md + `@file` + README polish | partial (helpers + README dual-mode env table) | |
