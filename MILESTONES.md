@@ -10,7 +10,7 @@
 | M3 | `provider::OpenAICompat` client (blocking) | **done** (scaffold; unit-light) | Grok/team |
 | M4 | Minimal agent TUI skeleton (`--agent`) | **scaffolded** (compiles; stdin TTY guard; non-TTY clean fail) | Grok/team |
 | M5 | Wire `main.rs` `--agent`; keep `--tui` as wall | **scaffolded** (flag + feature gate; `--tui` TTY guard) | Grok/team |
-| M6 | E2E local chat turn | partial (offline+live units; auto-pick model; **401→refresh once** OpenAI/xAI) | |
+| M6 | E2E local chat turn | partial (`--agent-once`; SSE stream parse; 401 refresh; live Ollama ignore probes) | |
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
 | M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>`; `/delete <id>`) | |
 | M9 | Tools (bash, read) + plan/build toggle | partial (`!bash`/`!read`/`!write`/`!edit path:old=>new`; plan blocks writes) | |

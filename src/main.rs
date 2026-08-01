@@ -81,6 +81,32 @@ fn main() -> eframe::Result<()> {
         std::process::exit(0);
     }
 
+    // --agent-once "prompt": headless one-shot chat (no TTY). Feature agent.
+    // Parse before --agent so `--agent --agent-once` still works if once is listed.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(i) = args.iter().position(|a| a == "--agent-once") {
+            #[cfg(feature = "agent")]
+            {
+                let prompt = args.get(i + 1).map(String::as_str).unwrap_or("");
+                if let Err(e) = agent_tui::run_once(prompt) {
+                    eprintln!("plazir18 --agent-once failed: {e}");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            #[cfg(not(feature = "agent"))]
+            {
+                let _ = i;
+                eprintln!(
+                    "plazir18: --agent-once requires building with `--features agent`\n\
+                     cargo install --path . --features agent"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+
     // --agent: minimal coding-agent TUI (OpenCode × titanium breed).
     // Requires `--features agent` at build time.
     if std::env::args().any(|a| a == "--agent") {

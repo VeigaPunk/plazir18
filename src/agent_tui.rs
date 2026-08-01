@@ -2,7 +2,7 @@
 //! Conversation + thin status + input. Slash commands. Zero chrome.
 
 use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
-use crate::auth::{self, ProviderId};
+use crate::auth::{self, AuthProvider, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat, apply_chat_turn};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::Frame;
@@ -915,11 +915,87 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Headless one-shot chat: no TTY required. Prints assistant reply to stdout.
+/// Uses the same connect/pick_default path as the interactive agent.
+pub fn run_once(prompt: &str) -> io::Result<()> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err(io::Error::other("empty --agent-once prompt"));
+    }
+    let mut creds = auth::load_all().unwrap_or_default();
+    #[cfg(feature = "oauth")]
+    {
+        for id in [ProviderId::Openai, ProviderId::Xai] {
+            if let Some(c) = creds.get(&id).cloned()
+                && auth::credential_expired(&c)
+                && let Some(rt) = c.refresh_token.as_deref().filter(|s| !s.is_empty())
+            {
+                let refreshed = match id {
+                    ProviderId::Openai => auth::openai_refresh_access_token(rt).ok(),
+                    ProviderId::Xai => auth::xai_refresh_access_token(rt).ok(),
+                    _ => None,
+                };
+                if let Some(fresh) = refreshed {
+                    let _ = auth::save(id, fresh.clone());
+                    creds.insert(id, fresh);
+                }
+            }
+        }
+    }
+    let (id, client) = provider::pick_default(&creds)
+        .and_then(|(id, cred)| provider::client_for(id, &cred).ok().map(|c| (id, c)))
+        .or_else(|| {
+            // Same fallthrough as `/connect`: always-Ok Local when no cloud keys stored.
+            let cred = auth::LocalAuth::default().login().ok()?;
+            provider::client_for(ProviderId::Local, &cred)
+                .ok()
+                .map(|c| (ProviderId::Local, c))
+        })
+        .ok_or_else(|| {
+            io::Error::other(
+                "no provider — set OPENAI_API_KEY / XAI_API_KEY / OPENCODE_ZEN_API_KEY or run Local (Ollama)",
+            )
+        })?;
+    let messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: "You are plazir18, a minimal open coding agent. Be concise.".into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: expand_at_files(prompt),
+        },
+    ];
+    let reply = match client.chat(&messages) {
+        Ok(r) => r,
+        #[cfg(feature = "oauth")]
+        Err(e) if e.is_unauthorized() => {
+            let stored = auth::load_all().unwrap_or_default();
+            let retry = stored.get(&id).and_then(|c| {
+                let rt = c.refresh_token.as_deref().filter(|s| !s.is_empty())?;
+                let fresh = match id {
+                    ProviderId::Openai => auth::openai_refresh_access_token(rt).ok(),
+                    ProviderId::Xai => auth::xai_refresh_access_token(rt).ok(),
+                    _ => None,
+                }?;
+                let _ = auth::save(id, fresh.clone());
+                provider::client_for(id, &fresh)
+                    .ok()
+                    .and_then(|c2| c2.chat(&messages).ok())
+            });
+            retry.ok_or_else(|| io::Error::other(e.to_string()))?
+        }
+        Err(e) => return Err(io::Error::other(e.to_string())),
+    };
+    println!("{reply}");
+    Ok(())
+}
+
 pub fn run() -> io::Result<()> {
     use std::io::IsTerminal;
     if !io::stdin().is_terminal() {
         return Err(io::Error::other(
-            "agent TUI requires a TTY (stdin is not a terminal)",
+            "agent TUI requires a TTY (stdin is not a terminal); use --agent-once \"prompt\" for headless",
         ));
     }
     let mut terminal = ratatui::init();

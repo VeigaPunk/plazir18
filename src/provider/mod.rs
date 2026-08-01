@@ -82,6 +82,18 @@ impl OpenAICompat {
     }
 
     pub fn chat(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
+        if chat_stream_preferred() {
+            match self.chat_stream(messages) {
+                Ok(s) if !s.is_empty() => return Ok(s),
+                Ok(_) => { /* fall through to non-stream */ }
+                Err(e) if e.is_unauthorized() => return Err(e),
+                Err(_) => { /* fall through */ }
+            }
+        }
+        self.chat_blocking(messages)
+    }
+
+    fn chat_blocking(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
         let url = format!("{}/chat/completions", self.base_url);
         let body = ChatRequest {
             model: self.model.clone(),
@@ -106,6 +118,34 @@ impl OpenAICompat {
             .text()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
         parse_chat_completion_body(&text)
+    }
+
+    /// Streaming chat (SSE). Accumulates `delta.content` into a full reply.
+    pub fn chat_stream(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
+        let url = format!("{}/chat/completions", self.base_url);
+        let body = ChatRequest {
+            model: self.model.clone(),
+            messages: messages.to_vec(),
+            stream: true,
+        };
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| ProviderError::Http(e.to_string()))?;
+        let mut req = client.post(&url).json(&body);
+        if let Some(k) = &self.api_key {
+            req = req.header("Authorization", format!("Bearer {k}"));
+        }
+        let resp = req.send().map_err(|e| ProviderError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            return Err(ProviderError::Http(format!("{status}: {text}")));
+        }
+        let text = resp
+            .text()
+            .map_err(|e| ProviderError::Other(e.to_string()))?;
+        accumulate_sse_chat_body(&text)
     }
 
     /// GET `{base}/models` (OpenAI-compatible catalog). Short timeout for connect path.
@@ -152,6 +192,73 @@ pub fn parse_chat_completion_body(body: &str) -> Result<String, ProviderError> {
         .next()
         .map(|c| c.message.content)
         .ok_or(ProviderError::Empty)
+}
+
+/// Prefer SSE stream when `PLAZIR_CHAT_STREAM` is 1/true/yes (default: on for local-ish bases).
+pub fn chat_stream_preferred() -> bool {
+    match std::env::var("PLAZIR_CHAT_STREAM") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        }
+        Err(_) => false,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: Option<StreamDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChunk {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+}
+
+/// Extract content delta from one SSE `data:` JSON payload (not including the `data: ` prefix).
+pub fn parse_sse_data_payload(data: &str) -> Option<String> {
+    let data = data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+    let chunk: StreamChunk = serde_json::from_str(data).ok()?;
+    chunk
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|c| c.delta)
+        .and_then(|d| d.content)
+        .filter(|s| !s.is_empty())
+}
+
+/// Accumulate OpenAI-style SSE body (`data: {...}\n\n` lines) into assistant text.
+pub fn accumulate_sse_chat_body(body: &str) -> Result<String, ProviderError> {
+    let mut out = String::new();
+    for line in body.lines() {
+        let line = line.trim();
+        let Some(payload) = line.strip_prefix("data:") else {
+            continue;
+        };
+        if let Some(piece) = parse_sse_data_payload(payload) {
+            out.push_str(&piece);
+        }
+    }
+    if out.is_empty() {
+        // Some servers return a single non-SSE JSON even when stream=true.
+        if let Ok(s) = parse_chat_completion_body(body) {
+            return Ok(s);
+        }
+        return Err(ProviderError::Empty);
+    }
+    Ok(out)
 }
 
 /// Append a user turn + assistant reply into a session history (pure M6 helper).
@@ -331,6 +438,21 @@ mod tests {
         }"#;
         let s = parse_chat_completion_body(body).unwrap();
         assert_eq!(s, "hello-local");
+    }
+
+    #[test]
+    fn accumulate_sse_chat_body_joins_deltas() {
+        let body = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
+data: [DONE]\n\n";
+        let s = accumulate_sse_chat_body(body).unwrap();
+        assert_eq!(s, "hello");
+        assert_eq!(
+            parse_sse_data_payload(r#" {"choices":[{"delta":{"content":"x"}}]} "#).as_deref(),
+            Some("x")
+        );
+        assert!(parse_sse_data_payload("[DONE]").is_none());
     }
 
     #[test]
