@@ -33,10 +33,8 @@ struct App {
 impl App {
     fn new() -> Self {
         let creds = auth::load_all().unwrap_or_default();
-        let provider = provider::pick_default(&creds).and_then(|(id, cred)| {
-            let model = provider::default_model_for(id);
-            OpenAICompat::from_cred(&cred, model).ok().map(|c| (id, c))
-        });
+        let provider = provider::pick_default(&creds)
+            .and_then(|(id, cred)| provider::client_for(id, &cred).ok().map(|c| (id, c)));
         let session = Session::new("default");
         let status = match &provider {
             Some((id, c)) => format!(
@@ -97,16 +95,16 @@ impl App {
                 });
                 if let Some((id, cred)) = picked {
                     let _ = auth::save(id, cred.clone());
-                    let model = provider::default_model_for(id);
-                    if let Ok(client) = OpenAICompat::from_cred(&cred, model) {
+                    if let Ok(client) = provider::client_for(id, &cred) {
                         let name = providers
                             .iter()
                             .find(|p| p.id() == id)
                             .map(|p| p.display_name().to_string())
                             .unwrap_or_else(|| id.as_str().to_string());
+                        let model = client.model.clone();
                         self.provider = Some((id, client));
                         self.refresh_status();
-                        self.push_assistant(format!("connected {name}"));
+                        self.push_assistant(format!("connected {name} \u{00b7} {model}"));
                         return;
                     }
                 }
@@ -116,7 +114,24 @@ impl App {
             }
             "models" => {
                 let msg = match &self.provider {
-                    Some((id, c)) => format!("active: {} / {}", id.as_str(), c.model),
+                    Some((id, c)) => {
+                        let mut line = format!("active: {} / {}", id.as_str(), c.model);
+                        if *id == ProviderId::Local {
+                            match c.list_model_ids() {
+                                Ok(ids) if !ids.is_empty() => {
+                                    let shown: Vec<&str> =
+                                        ids.iter().take(12).map(String::as_str).collect();
+                                    line.push_str(&format!("\ncatalog: {}", shown.join(", ")));
+                                    if ids.len() > 12 {
+                                        line.push_str(" \u{2026}");
+                                    }
+                                }
+                                Ok(_) => line.push_str("\ncatalog: (empty)"),
+                                Err(e) => line.push_str(&format!("\ncatalog: {e}")),
+                            }
+                        }
+                        line
+                    }
                     None => "no active model".into(),
                 };
                 self.push_assistant(msg);

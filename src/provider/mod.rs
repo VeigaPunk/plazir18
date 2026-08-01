@@ -26,6 +26,16 @@ struct ChatResponse {
     choices: Vec<ChatChoice>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ModelsListResponse {
+    data: Vec<ModelListEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelListEntry {
+    id: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
     #[error("http: {0}")]
@@ -84,6 +94,38 @@ impl OpenAICompat {
             .map_err(|e| ProviderError::Other(e.to_string()))?;
         parse_chat_completion_body(&text)
     }
+
+    /// GET `{base}/models` (OpenAI-compatible catalog). Short timeout for connect path.
+    pub fn list_model_ids(&self) -> Result<Vec<String>, ProviderError> {
+        let url = format!("{}/models", self.base_url);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .map_err(|e| ProviderError::Http(e.to_string()))?;
+        let mut req = client.get(&url);
+        if let Some(k) = &self.api_key {
+            req = req.header("Authorization", format!("Bearer {k}"));
+        }
+        let resp = req.send().map_err(|e| ProviderError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            return Err(ProviderError::Http(format!("{status}: {text}")));
+        }
+        let text = resp
+            .text()
+            .map_err(|e| ProviderError::Other(e.to_string()))?;
+        parse_models_list_body(&text)
+    }
+
+    /// If preferred model is absent from the local catalog, switch to the first listed id.
+    /// No-op when catalog fetch fails or is empty (keeps preferred).
+    pub fn resolve_local_model(mut self) -> Self {
+        if let Ok(ids) = self.list_model_ids() {
+            self.model = pick_model(&self.model, &ids);
+        }
+        self
+    }
 }
 
 /// Pure: extract first choice content from an OpenAI-compatible chat JSON body.
@@ -139,6 +181,39 @@ pub fn default_model_for(id: ProviderId) -> String {
         ProviderId::Openai => "gpt-4o".into(),
         ProviderId::Xai => "grok-3".into(),
     }
+}
+
+/// Pure: parse OpenAI-compatible `/models` JSON into model ids (order preserved).
+pub fn parse_models_list_body(body: &str) -> Result<Vec<String>, ProviderError> {
+    let parsed: ModelsListResponse =
+        serde_json::from_str(body).map_err(|e| ProviderError::Other(e.to_string()))?;
+    Ok(parsed
+        .data
+        .into_iter()
+        .map(|m| m.id)
+        .filter(|id| !id.is_empty())
+        .collect())
+}
+
+/// Prefer `preferred` when present in catalog; else first catalog id; else preferred.
+pub fn pick_model(preferred: &str, catalog: &[String]) -> String {
+    if catalog.is_empty() {
+        return preferred.to_string();
+    }
+    if catalog.iter().any(|m| m == preferred) {
+        return preferred.to_string();
+    }
+    catalog[0].clone()
+}
+
+/// Build client for provider; Local auto-picks catalog model when preferred missing.
+pub fn client_for(id: ProviderId, cred: &Credential) -> Result<OpenAICompat, ProviderError> {
+    let model = default_model_for(id);
+    let client = OpenAICompat::from_cred(cred, model)?;
+    Ok(match id {
+        ProviderId::Local => client.resolve_local_model(),
+        _ => client,
+    })
 }
 
 #[cfg(test)]
@@ -244,6 +319,21 @@ mod tests {
         assert!(!local.is_empty());
     }
 
+    #[test]
+    fn parse_models_list_body_ids() {
+        let body = r#"{"object":"list","data":[{"id":"qwen3:14b"},{"id":"gemma4"}]}"#;
+        let ids = parse_models_list_body(body).unwrap();
+        assert_eq!(ids, vec!["qwen3:14b".to_string(), "gemma4".to_string()]);
+    }
+
+    #[test]
+    fn pick_model_prefers_present_else_first() {
+        let cat = vec!["a".into(), "b".into()];
+        assert_eq!(pick_model("b", &cat), "b");
+        assert_eq!(pick_model("missing", &cat), "a");
+        assert_eq!(pick_model("x", &[]), "x");
+    }
+
     /// Live Ollama chat — run with:
     /// `PLAZIR_LOCAL_MODEL=qwen3:14b cargo test --features agent -- --ignored live_local_chat`
     #[test]
@@ -265,5 +355,19 @@ mod tests {
             reply.to_ascii_lowercase().contains("pong"),
             "expected pong in reply, got: {reply}"
         );
+    }
+
+    /// Live: resolve_local_model replaces missing default with a catalog id.
+    #[test]
+    #[ignore = "live ollama on :11434"]
+    fn live_resolve_local_model_picks_catalog() {
+        let client = OpenAICompat {
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: None,
+            model: "llama3.2-not-installed".into(),
+        }
+        .resolve_local_model();
+        assert_ne!(client.model, "llama3.2-not-installed");
+        assert!(!client.model.is_empty());
     }
 }
