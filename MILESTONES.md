@@ -14,8 +14,8 @@
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
 | M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>`; `/delete <id>`) | |
 | M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` timeout; `!write path:content`; unit-tested) | |
-| M10 | ChatGPT device-code OAuth | partial (PKCE; loopback; `/oauth-device` RFC8628 poll; browser open; `PLAZIR_OPENAI_DEVICE_URL`) | |
-| M11 | Grok PKCE OAuth | partial (`/oauth-xai`; `xai_exchange_code` → auth.x.ai; `PLAZIR_XAI_TOKEN_URL` override) | |
+| M10 | ChatGPT device-code OAuth | partial (PKCE; loopback; `/oauth-device`; soft refresh on start; skip empty store rows) | |
+| M11 | Grok PKCE OAuth | partial (`/oauth-xai`; `/oauth-device xai`; `xai_exchange_code` / device poll; token URL overrides) | |
 | M12 | `/init` AGENTS.md + `@file` + README polish | partial (helpers + README dual-mode env table) | |
 
 ## Acceptance

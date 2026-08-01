@@ -158,12 +158,15 @@ pub fn apply_chat_turn(
 }
 
 /// Prefer cloud creds (Zen → OpenAI → xAI), Local last (always-present local stub).
+/// Skips stored credentials with empty key/token (stale auth.json rows).
 pub fn pick_default(
     creds: &std::collections::HashMap<ProviderId, Credential>,
 ) -> Option<(ProviderId, Credential)> {
     for id in crate::auth::connect_provider_order() {
         if let Some(c) = creds.get(&id) {
-            return Some((id, c.clone()));
+            if crate::auth::credential_usable(id, c) {
+                return Some((id, c.clone()));
+            }
         }
     }
     None
@@ -276,6 +279,27 @@ mod tests {
         assert_eq!(id, ProviderId::Local);
 
         assert!(pick_default(&HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn pick_default_skips_empty_cloud_key() {
+        let mut map = HashMap::new();
+        map.insert(
+            ProviderId::Zen,
+            Credential {
+                api_key: Some("  ".into()),
+                ..Default::default()
+            },
+        );
+        map.insert(
+            ProviderId::Local,
+            Credential {
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                ..Default::default()
+            },
+        );
+        let (id, _) = pick_default(&map).unwrap();
+        assert_eq!(id, ProviderId::Local);
     }
 
     #[test]

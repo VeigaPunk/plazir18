@@ -28,7 +28,8 @@ pub use loopback::{LOOPBACK_ADDR, bind_addr_from_redirect, wait_for_oauth_callba
 pub use openai::{
     OPENAI_LOOPBACK_REDIRECT, openai_browser_oauth_start, openai_exchange_code,
     openai_poll_device_token, openai_refresh_access_token, openai_request_device_code,
-    xai_authorize_url_hint, xai_browser_oauth_start, xai_exchange_code,
+    xai_authorize_url_hint, xai_browser_oauth_start, xai_exchange_code, xai_poll_device_token,
+    xai_request_device_code,
 };
 
 use serde::{Deserialize, Serialize};
@@ -138,6 +139,30 @@ pub trait AuthProvider: Send + Sync {
             .or(cred.api_key.as_ref())
             .map(|t| format!("Bearer {t}"))
     }
+}
+
+fn non_empty_opt(s: &Option<String>) -> bool {
+    s.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false)
+}
+
+/// Cloud providers need a non-empty api_key or access_token; Local is always usable.
+pub fn credential_usable(id: ProviderId, c: &Credential) -> bool {
+    match id {
+        ProviderId::Local => true,
+        _ => non_empty_opt(&c.api_key) || non_empty_opt(&c.access_token),
+    }
+}
+
+/// True when `expires_at` is in the past (or within 60s). Missing expiry → not expired.
+pub fn credential_expired(c: &Credential) -> bool {
+    let Some(exp) = c.expires_at else {
+        return false;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    exp <= now.saturating_add(60)
 }
 
 /// `/connect` attempt order: cloud keyed providers first, Local (always-Ok) last.
@@ -293,5 +318,29 @@ mod tests {
         .expect("Local must accept after OpenAI loopback Err");
         assert_eq!(id, ProviderId::Local);
         assert_eq!(cred.base_url.as_deref(), Some(loopback));
+    }
+
+    #[test]
+    fn credential_usable_and_expired() {
+        assert!(credential_usable(ProviderId::Local, &Credential::default()));
+        assert!(!credential_usable(
+            ProviderId::Openai,
+            &Credential {
+                api_key: Some("  ".into()),
+                ..Default::default()
+            }
+        ));
+        assert!(credential_usable(
+            ProviderId::Openai,
+            &Credential {
+                access_token: Some("tok".into()),
+                ..Default::default()
+            }
+        ));
+        assert!(!credential_expired(&Credential::default()));
+        assert!(credential_expired(&Credential {
+            expires_at: Some(1),
+            ..Default::default()
+        }));
     }
 }

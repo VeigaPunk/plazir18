@@ -53,14 +53,27 @@ struct App {
     /// Background loopback listener result channel.
     #[cfg(feature = "oauth")]
     oauth_listen_rx: Option<std::sync::mpsc::Receiver<Result<(String, String), String>>>,
-    /// Background device-code poll result.
+    /// Background device-code poll result: (provider, credential).
     #[cfg(feature = "oauth")]
-    oauth_device_rx: Option<std::sync::mpsc::Receiver<Result<auth::Credential, String>>>,
+    oauth_device_rx:
+        Option<std::sync::mpsc::Receiver<Result<(ProviderId, auth::Credential), String>>>,
 }
 
 impl App {
     fn new() -> Self {
-        let creds = auth::load_all().unwrap_or_default();
+        let mut creds = auth::load_all().unwrap_or_default();
+        #[cfg(feature = "oauth")]
+        {
+            // Soft-refresh expired OpenAI tokens when a refresh_token is present.
+            if let Some(c) = creds.get(&ProviderId::Openai).cloned()
+                && auth::credential_expired(&c)
+                && let Some(rt) = c.refresh_token.as_deref().filter(|s| !s.is_empty())
+                && let Ok(fresh) = auth::openai_refresh_access_token(rt)
+            {
+                let _ = auth::save(ProviderId::Openai, fresh.clone());
+                creds.insert(ProviderId::Openai, fresh);
+            }
+        }
         let provider = provider::pick_default(&creds)
             .and_then(|(id, cred)| provider::client_for(id, &cred).ok().map(|c| (id, c)));
         let session = Session::new("default");
@@ -98,7 +111,7 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-device /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
@@ -176,34 +189,81 @@ impl App {
                     self.push_assistant("device poll already running");
                     return;
                 }
-                match auth::openai_request_device_code() {
-                    Ok(dc) => {
-                        let verify = dc
-                            .verification_uri_complete
-                            .clone()
-                            .unwrap_or_else(|| dc.verification_uri.clone());
-                        let _ = auth::open_url_best_effort(&verify);
-                        let interval = dc.interval.unwrap_or(5).max(1);
-                        let expires = dc.expires_in.unwrap_or(600);
-                        let device_code = dc.device_code.clone();
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        std::thread::spawn(move || {
-                            let r = auth::openai_poll_device_token(
-                                &device_code,
-                                interval,
-                                std::time::Duration::from_secs(expires.min(900)),
-                            );
-                            let _ = tx.send(r);
-                        });
-                        self.oauth_device_rx = Some(rx);
-                        self.push_assistant(format!(
-                            "OpenAI device code started.\nuser_code: {}\nvisit: {verify}\npolling every {interval}s (background, max {expires}s)",
-                            dc.user_code
-                        ));
+                let want_xai = arg.eq_ignore_ascii_case("xai") || arg.eq_ignore_ascii_case("grok");
+                if want_xai {
+                    let Some(client_id) = std::env::var("PLAZIR_XAI_OAUTH_CLIENT_ID")
+                        .ok()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                    else {
+                        self.push_assistant(
+                            "usage: /oauth-device xai  requires PLAZIR_XAI_OAUTH_CLIENT_ID",
+                        );
+                        return;
+                    };
+                    match auth::xai_request_device_code(&client_id) {
+                        Ok(dc) => {
+                            let verify = dc
+                                .verification_uri_complete
+                                .clone()
+                                .unwrap_or_else(|| dc.verification_uri.clone());
+                            let _ = auth::open_url_best_effort(&verify);
+                            let interval = dc.interval.unwrap_or(5).max(1);
+                            let expires = dc.expires_in.unwrap_or(600);
+                            let device_code = dc.device_code.clone();
+                            let cid = client_id.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let r = auth::xai_poll_device_token(
+                                    &cid,
+                                    &device_code,
+                                    interval,
+                                    std::time::Duration::from_secs(expires.min(900)),
+                                )
+                                .map(|c| (ProviderId::Xai, c));
+                                let _ = tx.send(r);
+                            });
+                            self.oauth_device_rx = Some(rx);
+                            self.push_assistant(format!(
+                                "xAI device code started.\nuser_code: {}\nvisit: {verify}\npolling every {interval}s (background)",
+                                dc.user_code
+                            ));
+                        }
+                        Err(e) => self.push_assistant(format!(
+                            "xAI device code failed: {e}\n(override PLAZIR_XAI_DEVICE_URL)"
+                        )),
                     }
-                    Err(e) => self.push_assistant(format!(
-                        "device code request failed: {e}\n(override PLAZIR_OPENAI_DEVICE_URL if IdP path differs)"
-                    )),
+                } else {
+                    match auth::openai_request_device_code() {
+                        Ok(dc) => {
+                            let verify = dc
+                                .verification_uri_complete
+                                .clone()
+                                .unwrap_or_else(|| dc.verification_uri.clone());
+                            let _ = auth::open_url_best_effort(&verify);
+                            let interval = dc.interval.unwrap_or(5).max(1);
+                            let expires = dc.expires_in.unwrap_or(600);
+                            let device_code = dc.device_code.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let r = auth::openai_poll_device_token(
+                                    &device_code,
+                                    interval,
+                                    std::time::Duration::from_secs(expires.min(900)),
+                                )
+                                .map(|c| (ProviderId::Openai, c));
+                                let _ = tx.send(r);
+                            });
+                            self.oauth_device_rx = Some(rx);
+                            self.push_assistant(format!(
+                                "OpenAI device code started.\nuser_code: {}\nvisit: {verify}\npolling every {interval}s (background, max {expires}s)\n(tip: /oauth-device xai for Grok)",
+                                dc.user_code
+                            ));
+                        }
+                        Err(e) => self.push_assistant(format!(
+                            "device code request failed: {e}\n(override PLAZIR_OPENAI_DEVICE_URL if IdP path differs)"
+                        )),
+                    }
                 }
             }
             #[cfg(feature = "oauth")]
@@ -476,14 +536,17 @@ impl App {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(cred)) => {
+            Ok(Ok((id, cred))) => {
                 self.oauth_device_rx = None;
-                let _ = auth::save(ProviderId::Openai, cred.clone());
-                match provider::client_for(ProviderId::Openai, &cred) {
+                let _ = auth::save(id, cred.clone());
+                match provider::client_for(id, &cred) {
                     Ok(client) => {
-                        self.provider = Some((ProviderId::Openai, client));
+                        self.provider = Some((id, client));
                         self.refresh_status();
-                        self.push_assistant("OpenAI device OAuth connected (tokens saved)");
+                        self.push_assistant(format!(
+                            "{} device OAuth connected (tokens saved)",
+                            id.as_str()
+                        ));
                     }
                     Err(e) => self.push_assistant(format!("client build failed: {e}")),
                 }

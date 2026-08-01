@@ -180,24 +180,20 @@ pub fn xai_exchange_code(
     )
 }
 
-/// Request a device code (RFC 8628). Endpoint overridable via `PLAZIR_OPENAI_DEVICE_URL`.
+/// Generic device-code request (RFC 8628).
 #[cfg(feature = "oauth")]
-pub fn openai_request_device_code() -> Result<super::pkce::DeviceCodeJson, String> {
-    let url = std::env::var("PLAZIR_OPENAI_DEVICE_URL")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| super::pkce::OPENAI_DEVICE_CODE_URL.to_string());
-    let body = super::pkce::device_code_request_body(
-        super::pkce::OPENAI_OAUTH_CLIENT_ID,
-        "openid profile email offline_access",
-    );
+pub fn request_device_code(
+    device_url: &str,
+    client_id: &str,
+    scope: &str,
+) -> Result<super::pkce::DeviceCodeJson, String> {
+    let body = super::pkce::device_code_request_body(client_id, scope);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
-        .post(&url)
+        .post(device_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -210,22 +206,21 @@ pub fn openai_request_device_code() -> Result<super::pkce::DeviceCodeJson, Strin
     super::pkce::parse_device_code_json(&text)
 }
 
-/// Single device-token poll. Returns:
-/// - `Ok(Some(cred))` on success
-/// - `Ok(None)` when still `authorization_pending` / `slow_down`
-/// - `Err` on hard failure
+/// Generic device-token poll once.
 #[cfg(feature = "oauth")]
-pub fn openai_poll_device_token_once(
+pub fn poll_device_token_once(
+    token_url: &str,
+    client_id: &str,
     device_code: &str,
+    api_base: &str,
 ) -> Result<Option<super::Credential>, String> {
-    let body =
-        super::pkce::device_token_poll_body(super::pkce::OPENAI_OAUTH_CLIENT_ID, device_code);
+    let body = super::pkce::device_token_poll_body(client_id, device_code);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
-        .post(super::pkce::OPENAI_TOKEN_URL)
+        .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -235,8 +230,7 @@ pub fn openai_poll_device_token_once(
     if status.is_success() {
         let tokens = super::pkce::parse_oauth_token_json(&text)?;
         return Ok(Some(super::pkce::credential_from_oauth_tokens(
-            &tokens,
-            "https://api.openai.com/v1",
+            &tokens, api_base,
         )));
     }
     match super::pkce::parse_oauth_error_code(&text).as_deref() {
@@ -248,8 +242,11 @@ pub fn openai_poll_device_token_once(
 
 /// Poll device_code until success, expiry, or `max_wait`.
 #[cfg(feature = "oauth")]
-pub fn openai_poll_device_token(
+pub fn poll_device_token(
+    token_url: &str,
+    client_id: &str,
     device_code: &str,
+    api_base: &str,
     interval_secs: u64,
     max_wait: std::time::Duration,
 ) -> Result<super::Credential, String> {
@@ -259,10 +256,9 @@ pub fn openai_poll_device_token(
         if start.elapsed() >= max_wait {
             return Err("device auth timed out".into());
         }
-        match openai_poll_device_token_once(device_code)? {
+        match poll_device_token_once(token_url, client_id, device_code, api_base)? {
             Some(c) => return Ok(c),
             None => {
-                // slow_down: bump interval slightly
                 std::thread::sleep(std::time::Duration::from_secs(interval));
                 if interval < 10 {
                     interval += 1;
@@ -270,6 +266,70 @@ pub fn openai_poll_device_token(
             }
         }
     }
+}
+
+/// Request a device code (OpenAI). Override via `PLAZIR_OPENAI_DEVICE_URL`.
+#[cfg(feature = "oauth")]
+pub fn openai_request_device_code() -> Result<super::pkce::DeviceCodeJson, String> {
+    let url = std::env::var("PLAZIR_OPENAI_DEVICE_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| super::pkce::OPENAI_DEVICE_CODE_URL.to_string());
+    request_device_code(
+        &url,
+        super::pkce::OPENAI_OAUTH_CLIENT_ID,
+        "openid profile email offline_access",
+    )
+}
+
+#[cfg(feature = "oauth")]
+pub fn openai_poll_device_token(
+    device_code: &str,
+    interval_secs: u64,
+    max_wait: std::time::Duration,
+) -> Result<super::Credential, String> {
+    poll_device_token(
+        super::pkce::OPENAI_TOKEN_URL,
+        super::pkce::OPENAI_OAUTH_CLIENT_ID,
+        device_code,
+        "https://api.openai.com/v1",
+        interval_secs,
+        max_wait,
+    )
+}
+
+/// xAI device-code request. Needs `PLAZIR_XAI_OAUTH_CLIENT_ID`; optional `PLAZIR_XAI_DEVICE_URL`.
+#[cfg(feature = "oauth")]
+pub fn xai_request_device_code(client_id: &str) -> Result<super::pkce::DeviceCodeJson, String> {
+    let url = std::env::var("PLAZIR_XAI_DEVICE_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| super::pkce::XAI_DEVICE_CODE_URL.to_string());
+    request_device_code(&url, client_id, "openid offline_access")
+}
+
+#[cfg(feature = "oauth")]
+pub fn xai_poll_device_token(
+    client_id: &str,
+    device_code: &str,
+    interval_secs: u64,
+    max_wait: std::time::Duration,
+) -> Result<super::Credential, String> {
+    let token_url = std::env::var("PLAZIR_XAI_TOKEN_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| super::pkce::XAI_TOKEN_URL.to_string());
+    poll_device_token(
+        &token_url,
+        client_id,
+        device_code,
+        "https://api.x.ai/v1",
+        interval_secs,
+        max_wait,
+    )
 }
 
 /// POST refresh_token → tokens (network).

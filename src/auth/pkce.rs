@@ -98,6 +98,9 @@ pub const XAI_TOKEN_URL: &str = "https://auth.x.ai/oauth/token";
 /// OAuth 2.0 device authorization endpoint (override `PLAZIR_OPENAI_DEVICE_URL`).
 pub const OPENAI_DEVICE_CODE_URL: &str = "https://auth.openai.com/oauth/device/code";
 
+/// Default xAI device authorization endpoint (override `PLAZIR_XAI_DEVICE_URL`).
+pub const XAI_DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth/device/code";
+
 /// RFC 8628 device_code grant type.
 pub const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
