@@ -2,7 +2,9 @@
 //! Conversation + thin status + input. Slash commands. Zero chrome.
 
 use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
-use crate::agent::{run_tool_loop, tool_loop_enabled_for};
+use crate::agent::{
+    ToolLoopOutcome, run_tool_loop, run_tool_loop_final, run_tool_rounds, tool_loop_enabled_for,
+};
 use crate::auth::{self, AuthProvider, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat, apply_chat_turn};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -822,40 +824,64 @@ impl App {
         let (id, client) = self.provider.as_ref().expect("checked");
         let id = *id;
         let plan_mode = self.mode == Mode::Plan;
-        if tool_loop_enabled_for(Some(id)) {
-            // Mutate history in place via tool loop (user turn already in req).
+        let want_stream = provider::chat_stream_preferred();
+        let want_tools = tool_loop_enabled_for(Some(id));
+
+        if want_tools {
+            // Tool rounds (non-stream). Final answer may stream when PLAZIR_CHAT_STREAM=1.
             self.messages = req;
-            let loop_result = {
+            let phase = {
                 let client = &self.provider.as_ref().expect("checked").1;
-                run_tool_loop(client, &mut self.messages, plan_mode)
+                run_tool_rounds(client, &mut self.messages, plan_mode)
             };
-            let loop_result = match loop_result {
+            let phase = match phase {
                 Ok(v) => Ok(v),
                 Err(e) if e.is_unauthorized() => {
                     if self.try_refresh_active_provider(id) {
                         let client = &self.provider.as_ref().expect("checked").1;
-                        run_tool_loop(client, &mut self.messages, plan_mode)
+                        run_tool_rounds(client, &mut self.messages, plan_mode)
                     } else {
                         Err(e)
                     }
                 }
                 Err(e) => Err(e),
             };
-            match loop_result {
-                Ok((reply, notes)) => {
+            match phase {
+                Ok(ToolLoopOutcome::Done { reply, notes }) => {
                     for n in notes {
                         self.push_assistant(format!("tool: {n}"));
                     }
                     self.push_assistant(reply);
+                    let _ = self.persist();
                 }
-                Err(e) => self.push_assistant(format!("error: {e}")),
+                Ok(ToolLoopOutcome::NeedsFinal { notes }) => {
+                    for n in notes {
+                        self.push_assistant(format!("tool: {n}"));
+                    }
+                    if want_stream {
+                        // History already has user+tool turns; stream final no-tools answer.
+                        let client = self.provider.as_ref().expect("checked").1.clone();
+                        self.start_stream_from_history(self.messages.clone(), id, client);
+                    } else {
+                        let client = &self.provider.as_ref().expect("checked").1;
+                        match client.chat_turn(&self.messages, None) {
+                            Ok(t) if !t.content.is_empty() => self.push_assistant(t.content),
+                            Ok(_) => self.push_assistant("(no final text after tools)".into()),
+                            Err(e) => self.push_assistant(format!("error: {e}")),
+                        }
+                        let _ = self.persist();
+                    }
+                }
+                Err(e) => {
+                    self.push_assistant(format!("error: {e}"));
+                    let _ = self.persist();
+                }
             }
-            let _ = self.persist();
             return;
         }
 
         // Prefer live TUI stream when PLAZIR_CHAT_STREAM is set (non-tool path).
-        if provider::chat_stream_preferred() {
+        if want_stream {
             self.start_stream_chat(req, expanded, id, client.clone());
             return;
         }
@@ -903,6 +929,16 @@ impl App {
             content: expanded,
             ..Default::default()
         });
+        self.start_stream_from_history(req, id, client);
+    }
+
+    /// Stream final assistant reply; `req` is full history sent to the API (no tools).
+    fn start_stream_from_history(
+        &mut self,
+        req: Vec<ChatMessage>,
+        id: ProviderId,
+        client: OpenAICompat,
+    ) {
         self.messages.push(ChatMessage {
             role: "assistant".into(),
             content: String::new(),
@@ -1169,18 +1205,27 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
         ChatMessage::text("user", expand_at_files(prompt)),
     ];
     let use_tools = tool_loop_enabled_for(Some(id));
-    let progressive = provider::chat_stream_preferred() && !use_tools;
+    let want_stream = provider::chat_stream_preferred();
+    let progressive = want_stream && !use_tools;
     let chat_once = |c: &OpenAICompat, msgs: &mut Vec<ChatMessage>| {
-        if use_tools {
+        use std::io::Write;
+        if use_tools && want_stream {
+            // Tools then progressive final when NeedsFinal path is internal to final helper.
+            let mut printed = false;
+            let r = run_tool_loop_final(c, msgs, false, true, &mut |d| {
+                printed = true;
+                let _ = write!(std::io::stdout(), "{d}");
+                let _ = std::io::stdout().flush();
+            })
+            .map(|(reply, _)| reply);
+            if printed {
+                let _ = writeln!(std::io::stdout());
+            }
+            r
+        } else if use_tools {
             run_tool_loop(c, msgs, false).map(|(r, _)| r)
         } else if progressive {
-            // Live token paint to stdout (line-by-line SSE).
-            use std::io::Write;
-            let mut first = true;
             let r = c.chat_stream_for_each(msgs, |delta| {
-                if first {
-                    first = false;
-                }
                 let _ = write!(std::io::stdout(), "{delta}");
                 let _ = std::io::stdout().flush();
             });

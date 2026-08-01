@@ -86,8 +86,9 @@ Agent needs a provider key or local endpoint. `/connect` tries cloud keys first 
 | `PLAZIR_LOCAL_BASE` / `PLAZIR_LOCAL_KEY` | Local (Ollama, etc.) |
 | `PLAZIR_LOCAL_MODEL` | Local chat model (default `llama3.2`; if missing from `/models`, first catalog id is used) |
 | `PLAZIR_CHAT_STREAM=1\|true` | Prefer SSE streaming (live TUI tokens + progressive `--agent-once`) |
-| `PLAZIR_TOOL_LOOP` | Tool loop: unset=**Local on** / cloud off; `1`=always; `0`=never |
+| `PLAZIR_TOOL_LOOP` | Tool loop: unset=**Local on** (unless stream preferred) / cloud off; `1`=always; `0`=never |
 | `PLAZIR_TOOL_LOOP_MAX` | Max tool rounds per turn (1–16, default 6) |
+| both stream + tools | `PLAZIR_TOOL_LOOP=1` + `PLAZIR_CHAT_STREAM=1` → tool rounds then **stream final** |
 | `PLAZIR_LOCAL=1\|true\|prefer` | Force Local-first |
 | Loopback `OPENAI_BASE_URL` | Rejected by OpenAI path; handed to Local base |
 

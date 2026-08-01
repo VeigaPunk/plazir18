@@ -20,7 +20,7 @@ pub fn max_tool_rounds() -> usize {
 /// Tool-loop policy from env + provider.
 /// - `PLAZIR_TOOL_LOOP=1|true|yes|on` → always on  
 /// - `PLAZIR_TOOL_LOOP=0|false|no|off` → always off  
-/// - unset → **on for Local only** (safe default for Ollama tool-capable models)
+/// - unset → **on for Local only**, unless `PLAZIR_CHAT_STREAM` prefers SSE (stream wins for live paint)
 pub fn tool_loop_enabled_for(provider: Option<crate::auth::ProviderId>) -> bool {
     match std::env::var("PLAZIR_TOOL_LOOP") {
         Ok(v) => {
@@ -30,7 +30,10 @@ pub fn tool_loop_enabled_for(provider: Option<crate::auth::ProviderId>) -> bool 
             }
             matches!(v.as_str(), "1" | "true" | "yes" | "on")
         }
-        Err(_) => matches!(provider, Some(crate::auth::ProviderId::Local)),
+        Err(_) => {
+            matches!(provider, Some(crate::auth::ProviderId::Local))
+                && !crate::provider::chat_stream_preferred()
+        }
     }
 }
 
@@ -127,12 +130,21 @@ pub fn tool_result_message(call: &ToolCall, output: impl Into<String>) -> ChatMe
     }
 }
 
-/// Run up to `MAX_TOOL_ROUNDS` of tool-using chat. Returns final assistant text.
-pub fn run_tool_loop(
+/// Outcome of tool rounds before an optional final no-tools completion.
+#[derive(Debug)]
+pub enum ToolLoopOutcome {
+    /// Model produced final text (no pending tool calls).
+    Done { reply: String, notes: Vec<String> },
+    /// Hit max tool rounds; history is ready for a no-tools final (stream or block).
+    NeedsFinal { notes: Vec<String> },
+}
+
+/// Run tool rounds only (with tools). Does not stream.
+pub fn run_tool_rounds(
     client: &OpenAICompat,
     messages: &mut Vec<ChatMessage>,
     plan_mode: bool,
-) -> Result<(String, Vec<String>), ProviderError> {
+) -> Result<ToolLoopOutcome, ProviderError> {
     let tools = builtin_tool_defs();
     let mut log = Vec::new();
     let max = max_tool_rounds();
@@ -142,23 +154,54 @@ pub fn run_tool_loop(
             if turn.content.is_empty() {
                 return Err(ProviderError::Empty);
             }
-            return Ok((turn.content, log));
+            return Ok(ToolLoopOutcome::Done {
+                reply: turn.content,
+                notes: log,
+            });
         }
         let notes = append_tool_round(messages, &turn, plan_mode);
         log.extend(notes);
     }
-    // Cap: last try without tools for a final answer.
-    let final_turn = client.chat_turn(messages, None)?;
-    if final_turn.content.is_empty() {
-        Ok((
-            format!(
-                "(tool loop hit {max} rounds; no final text)\n{}",
-                log.join("\n")
-            ),
-            log,
-        ))
-    } else {
-        Ok((final_turn.content, log))
+    Ok(ToolLoopOutcome::NeedsFinal { notes: log })
+}
+
+/// Run up to max tool rounds; final no-tools answer is blocking (or streamed via callback).
+pub fn run_tool_loop(
+    client: &OpenAICompat,
+    messages: &mut Vec<ChatMessage>,
+    plan_mode: bool,
+) -> Result<(String, Vec<String>), ProviderError> {
+    run_tool_loop_final(client, messages, plan_mode, false, &mut |_| {})
+}
+
+/// Like [`run_tool_loop`], but when `stream_final` is set the last no-tools
+/// completion uses SSE and invokes `on_delta` for each token.
+pub fn run_tool_loop_final(
+    client: &OpenAICompat,
+    messages: &mut Vec<ChatMessage>,
+    plan_mode: bool,
+    stream_final: bool,
+    on_delta: &mut dyn FnMut(&str),
+) -> Result<(String, Vec<String>), ProviderError> {
+    match run_tool_rounds(client, messages, plan_mode)? {
+        ToolLoopOutcome::Done { reply, notes } => Ok((reply, notes)),
+        ToolLoopOutcome::NeedsFinal { notes } => {
+            let reply = if stream_final {
+                client.chat_stream_for_each(messages, |d| on_delta(d))?
+            } else {
+                let final_turn = client.chat_turn(messages, None)?;
+                if final_turn.content.is_empty() {
+                    format!(
+                        "(tool loop hit {} rounds; no final text)\n{}",
+                        max_tool_rounds(),
+                        notes.join("\n")
+                    )
+                } else {
+                    final_turn.content
+                }
+            };
+            Ok((reply, notes))
+        }
     }
 }
 
