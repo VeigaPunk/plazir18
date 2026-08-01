@@ -1,5 +1,5 @@
-//! Agent Wall — tmux session dashboard. Entry point + channel wiring.
-//! The poll loop lives in `poller.rs`; its event source in `wake.rs`.
+//! Agent Wall — tmux session dashboard + optional minimal coding agent TUI.
+//! Entry point + channel wiring.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use eframe::egui;
@@ -18,6 +18,13 @@ mod tmux;
 mod tui;
 mod ui;
 mod wake;
+
+#[cfg(feature = "agent")]
+mod auth;
+#[cfg(feature = "agent")]
+mod provider;
+#[cfg(feature = "agent")]
+mod agent_tui;
 
 use persist::WinState;
 use theme::{
@@ -56,8 +63,6 @@ fn main() -> eframe::Result<()> {
     }
 
     // --status-json: one Waybar line from the same fold the wall renders.
-    // Must stay above the single-instance guard — the bar polls this while the
-    // GUI is running, so it may not bind the port, the IPC socket, or the FIFO.
     if std::env::args().any(|a| a == "--status-json") {
         println!(
             "{}",
@@ -66,9 +71,7 @@ fn main() -> eframe::Result<()> {
         std::process::exit(0);
     }
 
-    // --status-pango: render sessions into waybar via Pango markup. Must stay
-    // above the single-instance guard — the bar polls this while the GUI is
-    // running, so it may not bind the port, the IPC socket, or the FIFO.
+    // --status-pango: render sessions into waybar via Pango markup.
     if std::env::args().any(|a| a == "--status-pango") {
         let buffer = tui::render_waybar_to_buffer();
         let markup = tui::buffer_to_pango(&buffer);
@@ -76,7 +79,28 @@ fn main() -> eframe::Result<()> {
         std::process::exit(0);
     }
 
-    // --tui: launch the ratatui dashboard. Must stay above the single-instance
+    // --agent: minimal coding-agent TUI (OpenCode × titanium breed).
+    // Requires `--features agent` at build time.
+    if std::env::args().any(|a| a == "--agent") {
+        #[cfg(feature = "agent")]
+        {
+            if let Err(e) = agent_tui::run() {
+                eprintln!("plazir18 --agent failed: {e}");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "agent"))]
+        {
+            eprintln!(
+                "plazir18: --agent requires building with `--features agent`\n\
+                 cargo install --path . --features agent"
+            );
+            std::process::exit(2);
+        }
+    }
+
+    // --tui: launch the ratatui wall dashboard. Must stay above the single-instance
     // guard — the TUI must be runnable while the egui GUI is also running.
     if std::env::args().any(|a| a == "--tui") {
         if let Err(e) = tui::run() {
@@ -103,7 +127,6 @@ fn main() -> eframe::Result<()> {
     };
 
     // Bounded channel: poller drops updates when the UI is behind.
-    // Sized for up to MAX_CONCURRENT pane updates + session list.
     let (tx, rx) = mpsc::sync_channel::<AppMsg>(MAX_CONCURRENT * 2 + 8);
 
     // Wake channel: one sender in the FIFO reader (real tmux activity), one in
