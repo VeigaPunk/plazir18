@@ -11,9 +11,9 @@
 | M4 | Minimal agent TUI skeleton (`--agent`) | **scaffolded** (compiles; stdin TTY guard; non-TTY clean fail) | Grok/team |
 | M5 | Wire `main.rs` `--agent`; keep `--tui` as wall | **scaffolded** (flag + feature gate; `--tui` TTY guard) | Grok/team |
 | M6 | E2E local chat turn | pending | |
-| M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; units) | |
+| M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
 | M8 | Session persistence + multi-session | partial (store wired; unique ids) | |
-| M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; unit-tested) | |
+| M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` 30s timeout + kill; unit-tested) | |
 | M10 | ChatGPT device-code OAuth | pending (feature flag deps only) | |
 | M11 | Grok PKCE OAuth | pending (feature flag deps only) | |
 | M12 | `/init` AGENTS.md + `@file` + README polish | partial (helpers + README dual-mode env table) | |

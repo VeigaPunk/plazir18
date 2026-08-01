@@ -102,7 +102,8 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked                              # 71 pass, 2 ignored (live tmux)
 cargo clippy --features full --locked --all-targets -- -D warnings
-cargo test --features full --locked              # 100+ pass, 2 ignored (live tmux)
+cargo test --features full --locked              # 107 pass, 2 ignored (live tmux)
+# rust-version = "1.85" (edition 2024); agent !bash tools timeout at 30s
 cargo run --locked -- --status-json
 cargo run --locked -- --status-pango
 cargo run --locked              # multi-panel wall

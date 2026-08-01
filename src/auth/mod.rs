@@ -252,4 +252,28 @@ mod tests {
         .expect("local always ok");
         assert_eq!(id, ProviderId::Local);
     }
+
+    /// Dual-env composition: OpenAI rejects loopback `OPENAI_BASE_URL`; Local
+    /// inherits that base via `resolve_local_base` — one `try_connect` walk.
+    #[test]
+    fn try_connect_openai_loopback_hands_base_to_local() {
+        let loopback = "http://127.0.0.1:11434/v1";
+        let (id, cred) = try_connect_providers(|id| match id {
+            ProviderId::Openai => {
+                openai::resolve_openai_login(Some("sk-ollama"), Some(loopback)).ok()
+            }
+            ProviderId::Local => {
+                let base =
+                    local::resolve_local_base(None, Some(loopback), "http://127.0.0.1:9999/v1");
+                Some(Credential {
+                    base_url: Some(base),
+                    ..Default::default()
+                })
+            }
+            _ => None,
+        })
+        .expect("Local must accept after OpenAI loopback Err");
+        assert_eq!(id, ProviderId::Local);
+        assert_eq!(cred.base_url.as_deref(), Some(loopback));
+    }
 }

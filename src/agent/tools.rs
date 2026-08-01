@@ -1,7 +1,13 @@
 //! Minimal tool set: bash + read/write file. Plan mode is read-only.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+/// Hard cap so a hung `!bash` cannot freeze the agent TUI event loop.
+pub const BASH_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Clone)]
 pub enum Tool {
@@ -29,6 +35,88 @@ pub struct ToolResult {
     pub output: String,
 }
 
+/// Run `bash -c` with a wall-clock timeout. On timeout, SIGTERM then SIGKILL the child.
+fn run_bash_timed(cmd: &str, timeout: Duration) -> ToolResult {
+    let child = match Command::new("bash")
+        .arg("-c")
+        .arg(cmd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return ToolResult {
+                ok: false,
+                output: e.to_string(),
+            };
+        }
+    };
+
+    let pid = child.id();
+    let finished = Arc::new(AtomicBool::new(false));
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let fin_k = finished.clone();
+    let to_k = timed_out.clone();
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if fin_k.load(Ordering::SeqCst) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if fin_k.load(Ordering::SeqCst) {
+            return;
+        }
+        to_k.store(true, Ordering::SeqCst);
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
+        std::thread::sleep(Duration::from_millis(200));
+        if !fin_k.load(Ordering::SeqCst) {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .output();
+        }
+    });
+
+    let wait = child.wait_with_output();
+    finished.store(true, Ordering::SeqCst);
+
+    if timed_out.load(Ordering::SeqCst) {
+        return ToolResult {
+            ok: false,
+            output: format!("bash timed out after {}s", timeout.as_secs()),
+        };
+    }
+
+    match wait {
+        Ok(o) => {
+            let mut s = String::from_utf8_lossy(&o.stdout).to_string();
+            let err = String::from_utf8_lossy(&o.stderr);
+            if !err.is_empty() {
+                if !s.is_empty() {
+                    s.push('\n');
+                }
+                s.push_str(&err);
+            }
+            if s.len() > 8000 {
+                let head = truncate_utf8(&s, 8000);
+                s = format!("{head}\n\u{2026}truncated");
+            }
+            ToolResult {
+                ok: o.status.success(),
+                output: s,
+            }
+        }
+        Err(e) => ToolResult {
+            ok: false,
+            output: e.to_string(),
+        },
+    }
+}
+
 /// `plan_mode`: only Read + List allowed.
 pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
     match tool {
@@ -39,30 +127,7 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
                     output: "plan mode: bash disabled".into(),
                 };
             }
-            match Command::new("bash").arg("-c").arg(&cmd).output() {
-                Ok(o) => {
-                    let mut s = String::from_utf8_lossy(&o.stdout).to_string();
-                    let err = String::from_utf8_lossy(&o.stderr);
-                    if !err.is_empty() {
-                        if !s.is_empty() {
-                            s.push('\n');
-                        }
-                        s.push_str(&err);
-                    }
-                    if s.len() > 8000 {
-                        let head = truncate_utf8(&s, 8000);
-                        s = format!("{head}\n\u{2026}truncated");
-                    }
-                    ToolResult {
-                        ok: o.status.success(),
-                        output: s,
-                    }
-                }
-                Err(e) => ToolResult {
-                    ok: false,
-                    output: e.to_string(),
-                },
-            }
+            run_bash_timed(&cmd, Duration::from_secs(BASH_TIMEOUT_SECS))
         }
         Tool::Read { path } => match std::fs::read_to_string(&path) {
             Ok(s) => {
@@ -205,6 +270,18 @@ mod tests {
         );
         assert!(r.ok);
         assert_eq!(r.output, "ok");
+    }
+
+    #[test]
+    fn bash_timeout_kills_hanging_command() {
+        // Short timeout so the unit suite stays fast.
+        let r = run_bash_timed("sleep 60", Duration::from_millis(400));
+        assert!(!r.ok, "timeout must fail: {}", r.output);
+        assert!(
+            r.output.contains("timed out"),
+            "expected timeout message, got: {}",
+            r.output
+        );
     }
 
     #[test]
