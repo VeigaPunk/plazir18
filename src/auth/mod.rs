@@ -9,6 +9,8 @@ mod xai;
 mod zen;
 
 #[cfg(feature = "oauth")]
+pub mod loopback;
+#[cfg(feature = "oauth")]
 pub mod pkce;
 
 pub use local::LocalAuth;
@@ -16,6 +18,8 @@ pub use openai::OpenAiAuth;
 pub use xai::XaiAuth;
 pub use zen::ZenAuth;
 
+#[cfg(feature = "oauth")]
+pub use loopback::{LOOPBACK_ADDR, bind_addr_from_redirect, wait_for_oauth_callback};
 #[cfg(feature = "oauth")]
 pub use openai::{
     OPENAI_LOOPBACK_REDIRECT, openai_browser_oauth_start, openai_exchange_code,

@@ -69,7 +69,7 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
@@ -130,9 +130,56 @@ impl App {
                     auth::openai_browser_oauth_start(auth::OPENAI_LOOPBACK_REDIRECT);
                 self.oauth_pending = Some((verifier, state.clone()));
                 self.push_assistant(format!(
-                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2) after redirect, paste:\n   /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI host: {}",
+                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2a) /oauth-wait  (listens on 127.0.0.1:1455 up to 180s)\n2b) or paste: /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI host: {}",
                     auth::xai_authorize_url_hint()
                 ));
+            }
+            #[cfg(feature = "oauth")]
+            "oauth-wait" => {
+                let Some((verifier, expect_state)) = self.oauth_pending.clone() else {
+                    self.push_assistant("no pending /oauth \u{2014} run /oauth first");
+                    return;
+                };
+                let bind = auth::bind_addr_from_redirect(auth::OPENAI_LOOPBACK_REDIRECT)
+                    .unwrap_or_else(|_| auth::LOOPBACK_ADDR.to_string());
+                self.push_assistant(format!(
+                    "listening on http://{bind}/auth/callback (180s) \u{2014} complete browser login\u{2026}"
+                ));
+                // Blocks the TUI until callback or timeout (intentional for OAuth).
+                match auth::wait_for_oauth_callback(&bind, std::time::Duration::from_secs(180)) {
+                    Ok((code, state)) => {
+                        if state != expect_state {
+                            self.push_assistant(format!(
+                                "state mismatch (got {state}, expected {expect_state})"
+                            ));
+                            return;
+                        }
+                        match auth::openai_exchange_code(
+                            &code,
+                            auth::OPENAI_LOOPBACK_REDIRECT,
+                            &verifier,
+                        ) {
+                            Ok(cred) => {
+                                let _ = auth::save(ProviderId::Openai, cred.clone());
+                                match provider::client_for(ProviderId::Openai, &cred) {
+                                    Ok(client) => {
+                                        self.provider = Some((ProviderId::Openai, client));
+                                        self.oauth_pending = None;
+                                        self.refresh_status();
+                                        self.push_assistant(
+                                            "OpenAI OAuth connected via loopback (tokens saved)",
+                                        );
+                                    }
+                                    Err(e) => {
+                                        self.push_assistant(format!("client build failed: {e}"))
+                                    }
+                                }
+                            }
+                            Err(e) => self.push_assistant(format!("token exchange failed: {e}")),
+                        }
+                    }
+                    Err(e) => self.push_assistant(format!("oauth-wait: {e}")),
+                }
             }
             #[cfg(feature = "oauth")]
             "oauth-code" => {
