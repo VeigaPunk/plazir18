@@ -49,6 +49,19 @@ pub enum ProviderError {
     Other(String),
 }
 
+impl ProviderError {
+    /// True for HTTP 401 Unauthorized (expired OAuth / bad bearer).
+    pub fn is_unauthorized(&self) -> bool {
+        match self {
+            Self::Http(s) => {
+                let t = s.trim_start();
+                t.starts_with("401") || t.contains("status: 401")
+            }
+            _ => false,
+        }
+    }
+}
+
 pub struct OpenAICompat {
     pub base_url: String,
     pub api_key: Option<String>,
@@ -300,6 +313,13 @@ mod tests {
         );
         let (id, _) = pick_default(&map).unwrap();
         assert_eq!(id, ProviderId::Local);
+    }
+
+    #[test]
+    fn provider_error_is_unauthorized() {
+        assert!(ProviderError::Http("401 Unauthorized: expired".into()).is_unauthorized());
+        assert!(!ProviderError::Http("500 boom".into()).is_unauthorized());
+        assert!(!ProviderError::Empty.is_unauthorized());
     }
 
     #[test]

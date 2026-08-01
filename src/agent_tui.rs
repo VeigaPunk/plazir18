@@ -702,7 +702,7 @@ impl App {
             return;
         }
         let expanded = expand_at_files(&text);
-        let Some((_, client)) = &self.provider else {
+        if self.provider.is_none() {
             self.messages.push(ChatMessage {
                 role: "user".into(),
                 content: expanded,
@@ -710,14 +710,33 @@ impl App {
             self.push_assistant("not connected. /connect first.");
             let _ = self.persist();
             return;
-        };
+        }
         // Build request including the pending user turn without mutating yet.
         let mut req = self.messages.clone();
         req.push(ChatMessage {
             role: "user".into(),
             content: expanded.clone(),
         });
-        match client.chat(&req) {
+        let (id, client) = self.provider.as_ref().expect("checked");
+        let id = *id;
+        let first = client.chat(&req);
+        let result = match first {
+            Ok(reply) => Ok(reply),
+            Err(e) if e.is_unauthorized() => {
+                // One-shot OAuth refresh + retry (OpenAI only; needs refresh_token in store).
+                if self.try_refresh_active_provider(id) {
+                    if let Some((_, client)) = &self.provider {
+                        client.chat(&req)
+                    } else {
+                        Err(e)
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+            Err(e) => Err(e),
+        };
+        match result {
             Ok(reply) => apply_chat_turn(&mut self.messages, expanded, reply),
             Err(e) => {
                 self.messages.push(ChatMessage {
@@ -728,6 +747,48 @@ impl App {
             }
         }
         let _ = self.persist();
+    }
+
+    /// Refresh stored tokens for the active cloud provider; update client. Returns true if refreshed.
+    fn try_refresh_active_provider(&mut self, id: ProviderId) -> bool {
+        #[cfg(feature = "oauth")]
+        {
+            if id != ProviderId::Openai {
+                return false;
+            }
+            let stored = auth::load_all().unwrap_or_default();
+            let Some(cred) = stored.get(&ProviderId::Openai) else {
+                return false;
+            };
+            let Some(rt) = cred.refresh_token.as_deref().filter(|s| !s.is_empty()) else {
+                return false;
+            };
+            match auth::openai_refresh_access_token(rt) {
+                Ok(new_cred) => {
+                    let _ = auth::save(ProviderId::Openai, new_cred.clone());
+                    if let Ok(client) = provider::client_for(ProviderId::Openai, &new_cred) {
+                        // Preserve user-selected model if any.
+                        let model = self
+                            .provider
+                            .as_ref()
+                            .map(|(_, c)| c.model.clone())
+                            .unwrap_or_else(|| client.model.clone());
+                        let mut client = client;
+                        client.model = model;
+                        self.provider = Some((ProviderId::Openai, client));
+                        self.refresh_status();
+                        return true;
+                    }
+                    false
+                }
+                Err(_) => false,
+            }
+        }
+        #[cfg(not(feature = "oauth"))]
+        {
+            let _ = id;
+            false
+        }
     }
 }
 
