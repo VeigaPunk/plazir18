@@ -64,11 +64,11 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /models /model <id> /mode /session /sessions /open <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
-            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
         }
     }
 
@@ -175,6 +175,28 @@ impl App {
                 }
             }
             "open" => self.open_session(arg),
+            "delete" => {
+                if arg.is_empty() {
+                    self.push_assistant("usage: /delete <session-id-or-prefix>");
+                } else {
+                    match SessionStore::load_by_prefix(arg) {
+                        Ok(s) => {
+                            let id = s.id.clone();
+                            if id == self.session.id {
+                                self.push_assistant(
+                                    "cannot delete the active session \u{2014} /new first",
+                                );
+                            } else {
+                                match SessionStore::delete(&id) {
+                                    Ok(()) => self.push_assistant(format!("deleted {id}")),
+                                    Err(e) => self.push_assistant(format!("delete failed: {e}")),
+                                }
+                            }
+                        }
+                        Err(e) => self.push_assistant(e),
+                    }
+                }
+            }
             "sessions" => {
                 let list = SessionStore::list();
                 if list.is_empty() {

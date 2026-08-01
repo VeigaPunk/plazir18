@@ -12,7 +12,7 @@
 | M5 | Wire `main.rs` `--agent`; keep `--tui` as wall | **scaffolded** (flag + feature gate; `--tui` TTY guard) | Grok/team |
 | M6 | E2E local chat turn | partial (offline units; live ignore probes; `PLAZIR_LOCAL_MODEL`; auto-pick catalog model) | |
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
-| M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>` prefix switch) | |
+| M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>`; `/delete <id>`) | |
 | M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` 30s timeout + kill; unit-tested) | |
 | M10 | ChatGPT device-code OAuth | partial (PKCE pure helpers + authorize URL; network exchange pending) | |
 | M11 | Grok PKCE OAuth | partial (PKCE shared; authorize host constant; network exchange pending) | |
