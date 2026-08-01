@@ -8,10 +8,16 @@ mod openai;
 mod xai;
 mod zen;
 
+#[cfg(feature = "oauth")]
+pub mod pkce;
+
 pub use local::LocalAuth;
 pub use openai::OpenAiAuth;
 pub use xai::XaiAuth;
 pub use zen::ZenAuth;
+
+#[cfg(feature = "oauth")]
+pub use openai::{openai_browser_oauth_start, xai_authorize_url_hint};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

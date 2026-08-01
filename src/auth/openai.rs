@@ -52,6 +52,8 @@ impl AuthProvider for OpenAiAuth {
     }
 
     fn login(&self) -> Result<Credential, String> {
+        // Key path first. Browser PKCE scaffold lives in `auth::pkce` (feature oauth);
+        // full device-code exchange is still pending (M10).
         resolve_openai_login(
             std::env::var("OPENAI_API_KEY").ok().as_deref(),
             std::env::var("OPENAI_BASE_URL").ok().as_deref(),
@@ -64,6 +66,28 @@ impl AuthProvider for OpenAiAuth {
             .or(cred.api_key.as_ref())
             .map(|t| format!("Bearer {t}"))
     }
+}
+
+/// Start browser OAuth PKCE: returns (authorize_url, code_verifier, state).
+/// Token exchange is not wired yet (M10).
+#[cfg(feature = "oauth")]
+pub fn openai_browser_oauth_start(redirect_uri: &str) -> (String, String, String) {
+    let verifier = super::pkce::generate_code_verifier();
+    let challenge = super::pkce::code_challenge_s256(&verifier);
+    let state = super::pkce::generate_state();
+    let url = super::pkce::openai_authorize_url(
+        redirect_uri,
+        &state,
+        &challenge,
+        "openid profile email offline_access",
+    );
+    (url, verifier, state)
+}
+
+/// xAI authorize URL scaffold (query incomplete until client_id lands).
+#[cfg(feature = "oauth")]
+pub fn xai_authorize_url_hint() -> &'static str {
+    super::pkce::XAI_AUTHORIZE_URL
 }
 
 #[cfg(test)]

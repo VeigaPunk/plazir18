@@ -62,7 +62,14 @@ impl App {
     }
 
     fn help_text() -> &'static str {
-        "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+        #[cfg(feature = "oauth")]
+        {
+            "/help /clear /connect /oauth /models /model <id> /mode /session /sessions /open <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+        }
+        #[cfg(not(feature = "oauth"))]
+        {
+            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+        }
     }
 
     fn handle_slash(&mut self, cmd: &str) {
@@ -111,6 +118,15 @@ impl App {
                 self.push_assistant(
                     "no credentials.\n  Zen:   OPENCODE_ZEN_API_KEY / PLAZIR_ZEN_KEY  (opencode.ai/auth)\n  Local: PLAZIR_LOCAL_BASE / PLAZIR_LOCAL_KEY / PLAZIR_LOCAL_MODEL (default :11434 / llama3.2); PLAZIR_LOCAL=prefer; loopback OPENAI_BASE_URL handed to Local\n  OpenAI: OPENAI_API_KEY (+ remote OPENAI_BASE_URL)\n  Grok:  XAI_API_KEY / GROK_API_KEY",
                 );
+            }
+            #[cfg(feature = "oauth")]
+            "oauth" => {
+                let (url, _verifier, state) =
+                    auth::openai_browser_oauth_start("http://127.0.0.1:1455/auth/callback");
+                self.push_assistant(format!(
+                    "OpenAI browser PKCE (token exchange not wired \u{2014} M10).\nstate={state}\nopen:\n{url}\n\nxAI authorize host: {}",
+                    auth::xai_authorize_url_hint()
+                ));
             }
             "model" => {
                 if arg.is_empty() {

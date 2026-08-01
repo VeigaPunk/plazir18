@@ -20,6 +20,20 @@ pub fn resolve_zen_login(api_key: Option<&str>) -> Result<Credential, String> {
     })
 }
 
+/// Dual-env: first non-empty after trim wins (OPENCODE then PLAZIR).
+/// Empty `OPENCODE_ZEN_API_KEY=""` must not shadow a real `PLAZIR_ZEN_KEY`.
+pub fn resolve_zen_login_dual(
+    opencode_zen: Option<&str>,
+    plazir_zen: Option<&str>,
+) -> Result<Credential, String> {
+    let key = first_nonempty_trim(opencode_zen).or_else(|| first_nonempty_trim(plazir_zen));
+    resolve_zen_login(key)
+}
+
+fn first_nonempty_trim(v: Option<&str>) -> Option<&str> {
+    v.map(str::trim).filter(|s| !s.is_empty())
+}
+
 impl AuthProvider for ZenAuth {
     fn id(&self) -> ProviderId {
         ProviderId::Zen
@@ -30,10 +44,10 @@ impl AuthProvider for ZenAuth {
     }
 
     fn login(&self) -> Result<Credential, String> {
-        let from_env = std::env::var("OPENCODE_ZEN_API_KEY")
-            .or_else(|_| std::env::var("PLAZIR_ZEN_KEY"))
-            .ok();
-        resolve_zen_login(from_env.as_deref())
+        resolve_zen_login_dual(
+            std::env::var("OPENCODE_ZEN_API_KEY").ok().as_deref(),
+            std::env::var("PLAZIR_ZEN_KEY").ok().as_deref(),
+        )
     }
 
     fn authorization_header(&self, cred: &Credential) -> Option<String> {
@@ -57,5 +71,23 @@ mod tests {
         assert!(resolve_zen_login(Some("   ")).is_err());
         assert!(resolve_zen_login(None).is_err());
         assert!(resolve_zen_login(Some("")).is_err());
+    }
+
+    #[test]
+    fn dual_empty_opencode_does_not_shadow_plazir() {
+        let c = resolve_zen_login_dual(Some("  "), Some("  plazir-key  ")).unwrap();
+        assert_eq!(c.api_key.as_deref(), Some("plazir-key"));
+    }
+
+    #[test]
+    fn dual_opencode_wins_when_nonempty() {
+        let c = resolve_zen_login_dual(Some("oc"), Some("plazir")).unwrap();
+        assert_eq!(c.api_key.as_deref(), Some("oc"));
+    }
+
+    #[test]
+    fn dual_both_empty_errs() {
+        assert!(resolve_zen_login_dual(Some(""), Some("  ")).is_err());
+        assert!(resolve_zen_login_dual(None, None).is_err());
     }
 }

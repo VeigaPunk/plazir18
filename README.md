@@ -64,7 +64,7 @@ Default build is the **wall** only. Optional features:
 | Feature | Enables |
 |---------|---------|
 | `agent` | `--agent` TUI, OpenAI-compatible providers, tools, sessions |
-| `oauth` | OAuth helpers (depends on `agent`) |
+| `oauth` | OAuth helpers (PKCE pure + deps; depends on `agent`) |
 | `full` | `wall` + `agent` + `oauth` |
 
 ```bash
@@ -103,7 +103,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked                              # 71 pass, 2 ignored (live tmux)
 cargo clippy --features full --locked --all-targets -- -D warnings
-cargo test --features full --locked              # 115 pass, 4 ignored (live tmux + ollama)
+cargo test --features full --locked              # 124 pass, 4 ignored (live tmux + ollama)
 # rust-version = "1.85" (edition 2024); agent !bash tools timeout at 30s
 cargo run --locked -- --status-json
 cargo run --locked -- --status-pango

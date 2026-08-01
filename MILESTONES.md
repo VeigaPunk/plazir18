@@ -14,8 +14,8 @@
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
 | M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>` prefix switch) | |
 | M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` 30s timeout + kill; unit-tested) | |
-| M10 | ChatGPT device-code OAuth | pending (feature flag deps only) | |
-| M11 | Grok PKCE OAuth | pending (feature flag deps only) | |
+| M10 | ChatGPT device-code OAuth | partial (PKCE pure helpers + authorize URL; network exchange pending) | |
+| M11 | Grok PKCE OAuth | partial (PKCE shared; authorize host constant; network exchange pending) | |
 | M12 | `/init` AGENTS.md + `@file` + README polish | partial (helpers + README dual-mode env table) | |
 
 ## Acceptance
