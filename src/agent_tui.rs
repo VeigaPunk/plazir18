@@ -64,7 +64,7 @@ impl App {
     }
 
     fn help_text() -> &'static str {
-        "/help /clear /connect /models /mode /session /sessions /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+        "/help /clear /connect /models /mode /session /sessions /open <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
     }
 
     fn handle_slash(&mut self, cmd: &str) {
@@ -121,11 +121,18 @@ impl App {
                 };
                 self.push_assistant(msg);
             }
-            "session" => self.push_assistant(format!(
-                "session {} \u{2014} {} msgs",
-                self.session.id,
-                self.messages.iter().filter(|m| m.role != "system").count()
-            )),
+            "session" => {
+                if arg.is_empty() {
+                    self.push_assistant(format!(
+                        "session {} \u{2014} {} msgs \u{2014} /open <id> to switch",
+                        self.session.id,
+                        self.messages.iter().filter(|m| m.role != "system").count()
+                    ));
+                } else {
+                    self.open_session(arg);
+                }
+            }
+            "open" => self.open_session(arg),
             "sessions" => {
                 let list = SessionStore::list();
                 if list.is_empty() {
@@ -163,6 +170,33 @@ impl App {
             role: "assistant".into(),
             content: content.into(),
         });
+    }
+
+    fn open_session(&mut self, id_or_prefix: &str) {
+        let _ = self.persist();
+        match SessionStore::load_by_prefix(id_or_prefix) {
+            Ok(s) => {
+                self.messages = s.messages.clone();
+                if !self.messages.iter().any(|m| m.role == "system") {
+                    self.messages.insert(
+                        0,
+                        ChatMessage {
+                            role: "system".into(),
+                            content: "You are plazir18, a minimal open coding agent (OpenCode \u{00d7} titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.".into(),
+                        },
+                    );
+                }
+                self.session = s;
+                self.scroll = 0;
+                self.refresh_status();
+                self.push_assistant(format!(
+                    "opened {} \u{2014} {} msgs",
+                    self.session.id,
+                    self.messages.iter().filter(|m| m.role != "system").count()
+                ));
+            }
+            Err(e) => self.push_assistant(e),
+        }
     }
 
     fn persist(&mut self) -> Result<(), String> {

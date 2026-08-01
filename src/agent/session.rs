@@ -95,12 +95,31 @@ impl SessionStore {
         std::fs::write(path, pretty).map_err(|e| e.to_string())
     }
 
-    /// Load a session by id (API surface for multi-session UI).
-    #[allow(dead_code)]
+    /// Load a session by exact id.
     pub fn load(id: &str) -> Option<Session> {
         let path = sessions_dir().join(format!("{id}.json"));
         let raw = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&raw).ok()
+    }
+
+    /// Load by exact id, else unique id prefix (for `/open s-…` short forms).
+    pub fn load_by_prefix(prefix: &str) -> Result<Session, String> {
+        let p = prefix.trim();
+        if p.is_empty() {
+            return Err("usage: /open <session-id-or-prefix>".into());
+        }
+        if let Some(s) = Self::load(p) {
+            return Ok(s);
+        }
+        let hits: Vec<Session> = Self::list()
+            .into_iter()
+            .filter(|s| s.id.starts_with(p))
+            .collect();
+        match hits.len() {
+            0 => Err(format!("no session matching {p}")),
+            1 => Ok(hits.into_iter().next().expect("len 1")),
+            n => Err(format!("{n} sessions match {p} \u{2014} use a longer id")),
+        }
     }
 
     /// Delete a session file by id.
@@ -155,6 +174,31 @@ mod tests {
         assert_ne!(a.id, b.id);
         assert!(a.id.starts_with("s-"));
         assert!(b.id.starts_with("s-"));
+    }
+
+    #[test]
+    fn load_by_prefix_exact_and_unique() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("plazir18-prefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("PLAZIR18_SESSIONS_DIR", &dir);
+        }
+        let s = Session::new("pfx");
+        let id = s.id.clone();
+        SessionStore::save(&s).unwrap();
+        let exact = SessionStore::load_by_prefix(&id).unwrap();
+        assert_eq!(exact.id, id);
+        let short = &id[..id.len().min(10)];
+        let by = SessionStore::load_by_prefix(short).unwrap();
+        assert_eq!(by.id, id);
+        assert!(SessionStore::load_by_prefix("no-such-prefix-zzz").is_err());
+        SessionStore::delete(&id).unwrap();
+        unsafe {
+            std::env::remove_var("PLAZIR18_SESSIONS_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Offline M6: mock completion body → apply turn → persist/load session.
