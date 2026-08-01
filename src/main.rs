@@ -22,11 +22,11 @@ mod wake;
 #[cfg(feature = "agent")]
 mod agent;
 #[cfg(feature = "agent")]
+mod agent_tui;
+#[cfg(feature = "agent")]
 mod auth;
 #[cfg(feature = "agent")]
 mod provider;
-#[cfg(feature = "agent")]
-mod agent_tui;
 
 use persist::WinState;
 use theme::{
@@ -152,17 +152,11 @@ fn main() -> eframe::Result<()> {
 
     let default_w = match layout {
         LayoutMode::Strip => STRIP_WIN_W,
-        LayoutMode::Panel => PANEL_WIN_H,
+        LayoutMode::Panel => PANEL_WIN_W,
     };
     let default_h = match layout {
         LayoutMode::Strip => STRIP_WIN_H,
         LayoutMode::Panel => PANEL_WIN_H,
-    };
-
-    // fix: use PANEL_WIN_W for width
-    let default_w = match layout {
-        LayoutMode::Strip => STRIP_WIN_W,
-        LayoutMode::Panel => PANEL_WIN_W,
     };
 
     let w = if win_state.w > 0 {

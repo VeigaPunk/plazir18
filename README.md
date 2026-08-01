@@ -55,6 +55,36 @@ uwsm-app -- plazir18
 | `--tui` | Launch ratatui dashboard (terminal-based grid, one panel per pane) |
 | `--status-json` | Print Waybar status line and exit |
 | `--status-pango` | Print the multiline colored pane grid as Waybar JSON and exit |
+| `--agent` | Minimal coding-agent TUI (requires Cargo feature `agent`) |
+
+## Dual mode (wall + agent)
+
+Default build is the **wall** only. Optional features:
+
+| Feature | Enables |
+|---------|---------|
+| `agent` | `--agent` TUI, OpenAI-compatible providers, tools, sessions |
+| `oauth` | OAuth helpers (depends on `agent`) |
+| `full` | `wall` + `agent` + `oauth` |
+
+```bash
+cargo build --release --locked --features agent
+cargo run --features agent -- --agent
+cargo test --features full --locked
+```
+
+Agent needs a provider key or local endpoint. `/connect` tries cloud keys first (Zen → OpenAI → XAI), then Local:
+
+| Env | Role |
+|-----|------|
+| `OPENCODE_ZEN_API_KEY` / `PLAZIR_ZEN_KEY` | OpenCode Zen |
+| `OPENAI_API_KEY` (+ optional remote `OPENAI_BASE_URL`) | OpenAI cloud |
+| `XAI_API_KEY` / `GROK_API_KEY` | Grok |
+| `PLAZIR_LOCAL_BASE` / `PLAZIR_LOCAL_KEY` | Local (Ollama, etc.) |
+| `PLAZIR_LOCAL=1\|true\|prefer` | Force Local-first |
+| Loopback `OPENAI_BASE_URL` | Rejected by OpenAI path; handed to Local base |
+
+Interactive chat E2E is still roadmap; compile + unit tests are gated.
 
 ## Build & deploy (Windows)
 
@@ -66,9 +96,13 @@ uwsm-app -- plazir18
 ## Dev
 
 ```bash
-cargo test
-cargo run              # multi-panel
-cargo run -- --strip   # strip mode
+cargo test --locked
+cargo clippy --locked -- -D warnings
+cargo test --features full --locked
+cargo clippy --features full --locked -- -D warnings
+cargo run --locked              # multi-panel wall
+cargo run --locked -- --strip   # strip mode
+cargo run --locked -- --status-json
 ```
 
 Homepage / marketplace brand: https://ds4cc.com/

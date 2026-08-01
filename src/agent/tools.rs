@@ -5,14 +5,26 @@ use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub enum Tool {
-    Bash { cmd: String },
-    Read { path: String },
-    Write { path: String, content: String },
-    List { path: String },
+    Bash {
+        cmd: String,
+    },
+    Read {
+        path: String,
+    },
+    /// File write (scaffold; not yet wired from TUI).
+    #[allow(dead_code)]
+    Write {
+        path: String,
+        content: String,
+    },
+    List {
+        path: String,
+    },
 }
 
 #[derive(Debug)]
 pub struct ToolResult {
+    #[allow(dead_code)]
     pub ok: bool,
     pub output: String,
 }
@@ -38,8 +50,8 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
                         s.push_str(&err);
                     }
                     if s.len() > 8000 {
-                        s.truncate(8000);
-                        s.push_str("\n\u2026truncated");
+                        let head = truncate_utf8(&s, 8000);
+                        s = format!("{head}\n\u{2026}truncated");
                     }
                     ToolResult {
                         ok: o.status.success(),
@@ -53,12 +65,13 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
             }
         }
         Tool::Read { path } => match std::fs::read_to_string(&path) {
-            Ok(mut s) => {
-                if s.len() > 8000 {
-                    s.truncate(8000);
-                    s.push_str("\n\u2026truncated");
-                }
-                ToolResult { ok: true, output: s }
+            Ok(s) => {
+                let output = if s.len() > 8000 {
+                    format!("{}\n\u{2026}truncated", truncate_utf8(&s, 8000))
+                } else {
+                    s
+                };
+                ToolResult { ok: true, output }
             }
             Err(e) => ToolResult {
                 ok: false,
@@ -113,21 +126,32 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
     }
 }
 
+/// Truncate `s` to at most `max_bytes` on a char boundary (never panics on UTF-8).
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Resolve `@path` mentions in user text into file contents for context.
 pub fn expand_at_files(text: &str) -> String {
     let mut out = text.to_string();
     for token in text.split_whitespace() {
-        if let Some(path) = token.strip_prefix('@') {
-            if Path::new(path).is_file() {
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    let snippet = if content.len() > 4000 {
-                        format!("{}\u2026", &content[..4000])
-                    } else {
-                        content
-                    };
-                    out.push_str(&format!("\n\n--- @{path} ---\n{snippet}\n"));
-                }
-            }
+        if let Some(path) = token.strip_prefix('@')
+            && Path::new(path).is_file()
+            && let Ok(content) = std::fs::read_to_string(path)
+        {
+            let snippet = if content.len() > 4000 {
+                format!("{}\u{2026}", truncate_utf8(&content, 4000))
+            } else {
+                content
+            };
+            out.push_str(&format!("\n\n--- @{path} ---\n{snippet}\n"));
         }
     }
     out
@@ -152,4 +176,100 @@ cargo run --features agent -- --agent
 "#;
     std::fs::write(&path, body).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn plan_mode_blocks_bash() {
+        let r = run_tool(
+            Tool::Bash {
+                cmd: "echo hi".into(),
+            },
+            true,
+        );
+        assert!(!r.ok);
+        assert!(r.output.contains("plan mode"));
+    }
+
+    #[test]
+    fn bash_runs_when_not_plan() {
+        let r = run_tool(
+            Tool::Bash {
+                cmd: "printf 'ok'".into(),
+            },
+            false,
+        );
+        assert!(r.ok);
+        assert_eq!(r.output, "ok");
+    }
+
+    #[test]
+    fn expand_at_files_injects_content() {
+        let dir = std::env::temp_dir().join(format!("plazir18-at-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("snippet.txt");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            write!(f, "hello-at").unwrap();
+        }
+        let path_s = path.to_string_lossy();
+        let out = expand_at_files(&format!("see @{path_s} please"));
+        assert!(out.contains("hello-at"), "{out}");
+        assert!(out.contains(&format!("--- @{path_s} ---")), "{out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn expand_at_files_multibyte_truncate_no_panic() {
+        // Multi-byte UTF-8 (é = 2 bytes) so byte 4000 lands mid-char if sliced naively.
+        let dir = std::env::temp_dir().join(format!("plazir18-at-mb-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("big.txt");
+        let body: String = "é".repeat(2500); // 5000 bytes
+        assert!(body.len() > 4000);
+        std::fs::write(&path, &body).unwrap();
+        let path_s = path.to_string_lossy();
+        let out = expand_at_files(&format!("@{path_s}"));
+        assert!(out.contains('\u{2026}'), "{out}");
+        assert!(out.contains("--- @"), "{out}");
+        // Snippet before ellipsis must be valid UTF-8 (already is as String) and shorter.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn truncate_utf8_respects_char_boundary() {
+        let s = "é".repeat(10); // 20 bytes
+        let t = truncate_utf8(&s, 5); // would split mid-char at 5
+        assert!(t.len() <= 5);
+        assert!(s.is_char_boundary(t.len()));
+        assert_eq!(t, "éé"); // 4 bytes
+    }
+
+    #[test]
+    fn tool_output_cap_8000_is_utf8_safe() {
+        // odd max would mid-split multi-byte if String::truncate were used
+        let body: String = "é".repeat(5000); // 10000 bytes
+        assert!(body.len() > 8000);
+        let head = truncate_utf8(&body, 8000);
+        assert!(head.len() <= 8000);
+        assert!(body.is_char_boundary(head.len()));
+        let capped = format!("{head}\n\u{2026}truncated");
+        assert!(capped.contains('\u{2026}'));
+        assert!(capped.is_char_boundary(capped.len()));
+    }
+
+    #[test]
+    fn write_agents_md_creates_file() {
+        let dir = std::env::temp_dir().join(format!("plazir18-agents-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let written = write_agents_md(dir.to_str().unwrap()).unwrap();
+        assert!(Path::new(&written).is_file());
+        let body = std::fs::read_to_string(&written).unwrap();
+        assert!(body.contains("AGENTS.md"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

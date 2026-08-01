@@ -4,14 +4,14 @@
 //! Providers implement [`AuthProvider`]. See PLAN.md / AGENT_PLAN.md.
 
 mod local;
-mod zen;
 mod openai;
 mod xai;
+mod zen;
 
 pub use local::LocalAuth;
-pub use zen::ZenAuth;
 pub use openai::OpenAiAuth;
 pub use xai::XaiAuth;
+pub use zen::ZenAuth;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -62,9 +62,7 @@ struct AuthFile {
 fn auth_path() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("plazir18").join("auth.json")
 }
@@ -111,9 +109,11 @@ pub trait AuthProvider: Send + Sync {
     fn id(&self) -> ProviderId;
     fn display_name(&self) -> &str;
     fn login(&self) -> Result<Credential, String>;
+    #[allow(dead_code)]
     fn refresh(&self, cred: &Credential) -> Result<Credential, String> {
         Ok(cred.clone())
     }
+    #[allow(dead_code)]
     fn authorization_header(&self, cred: &Credential) -> Option<String> {
         cred.access_token
             .as_ref()
@@ -122,13 +122,66 @@ pub trait AuthProvider: Send + Sync {
     }
 }
 
+/// `/connect` attempt order: cloud keyed providers first, Local (always-Ok) last.
+/// If `PLAZIR_LOCAL` is `1`, `true`, or `prefer`, Local is tried first.
+pub fn connect_provider_order() -> [ProviderId; 4] {
+    connect_provider_order_with_prefer_local(plazir_local_prefer())
+}
+
+fn plazir_local_prefer() -> bool {
+    match std::env::var("PLAZIR_LOCAL") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "prefer"
+        }
+        Err(_) => false,
+    }
+}
+
+/// Pure order builder (testable without env).
+pub fn connect_provider_order_with_prefer_local(prefer_local: bool) -> [ProviderId; 4] {
+    if prefer_local {
+        [
+            ProviderId::Local,
+            ProviderId::Zen,
+            ProviderId::Openai,
+            ProviderId::Xai,
+        ]
+    } else {
+        [
+            ProviderId::Zen,
+            ProviderId::Openai,
+            ProviderId::Xai,
+            ProviderId::Local,
+        ]
+    }
+}
+
 pub fn builtin_providers() -> Vec<Box<dyn AuthProvider>> {
-    vec![
-        Box::new(LocalAuth::default()),
-        Box::new(ZenAuth),
-        Box::new(OpenAiAuth),
-        Box::new(XaiAuth),
-    ]
+    connect_provider_order()
+        .into_iter()
+        .map(|id| -> Box<dyn AuthProvider> {
+            match id {
+                ProviderId::Zen => Box::new(ZenAuth),
+                ProviderId::Openai => Box::new(OpenAiAuth),
+                ProviderId::Xai => Box::new(XaiAuth),
+                ProviderId::Local => Box::new(LocalAuth::default()),
+            }
+        })
+        .collect()
+}
+
+/// Pure connect selection: first provider whose `try_login` returns `Some`.
+/// Used by TUI `/connect` and unit-tested without env or network.
+pub fn try_connect_providers(
+    mut try_login: impl FnMut(ProviderId) -> Option<Credential>,
+) -> Option<(ProviderId, Credential)> {
+    for id in connect_provider_order() {
+        if let Some(cred) = try_login(id) {
+            return Some((id, cred));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -151,5 +204,52 @@ mod tests {
         let j = serde_json::to_string(&c).unwrap();
         let back: Credential = serde_json::from_str(&j).unwrap();
         assert_eq!(back.api_key.as_deref(), Some("test-key"));
+    }
+
+    #[test]
+    fn connect_order_local_is_last_by_default() {
+        let order = connect_provider_order_with_prefer_local(false);
+        assert_eq!(order[0], ProviderId::Zen);
+        assert_eq!(*order.last().unwrap(), ProviderId::Local);
+    }
+
+    #[test]
+    fn connect_order_local_first_when_prefer() {
+        let order = connect_provider_order_with_prefer_local(true);
+        assert_eq!(order[0], ProviderId::Local);
+        assert_eq!(order[1], ProviderId::Zen);
+    }
+
+    #[test]
+    fn try_connect_prefers_zen_when_key_present_over_local() {
+        // Simulate OPENCODE_ZEN_API_KEY set: Zen login succeeds; Local also would.
+        let (id, cred) = try_connect_providers(|id| match id {
+            ProviderId::Zen => Some(Credential {
+                api_key: Some("zen-test-key".into()),
+                base_url: Some("https://opencode.ai/zen/v1".into()),
+                ..Default::default()
+            }),
+            ProviderId::Local => Some(Credential {
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                ..Default::default()
+            }),
+            _ => None,
+        })
+        .expect("should connect");
+        assert_eq!(id, ProviderId::Zen);
+        assert_eq!(cred.api_key.as_deref(), Some("zen-test-key"));
+    }
+
+    #[test]
+    fn try_connect_falls_back_to_local_when_no_cloud_keys() {
+        let (id, _) = try_connect_providers(|id| match id {
+            ProviderId::Local => Some(Credential {
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                ..Default::default()
+            }),
+            _ => None,
+        })
+        .expect("local always ok");
+        assert_eq!(id, ProviderId::Local);
     }
 }

@@ -31,6 +31,7 @@ pub enum ProviderError {
     #[error("http: {0}")]
     Http(String),
     #[error("no credential for provider")]
+    #[allow(dead_code)]
     NoCred,
     #[error("empty response")]
     Empty,
@@ -90,19 +91,77 @@ impl OpenAICompat {
     }
 }
 
-/// Prefer local if present, then zen, then others.
+/// Prefer cloud creds (Zen → OpenAI → xAI), Local last (always-present local stub).
 pub fn pick_default(
     creds: &std::collections::HashMap<ProviderId, Credential>,
 ) -> Option<(ProviderId, Credential)> {
-    for id in [
-        ProviderId::Local,
-        ProviderId::Zen,
-        ProviderId::Openai,
-        ProviderId::Xai,
-    ] {
+    for id in crate::auth::connect_provider_order() {
         if let Some(c) = creds.get(&id) {
             return Some((id, c.clone()));
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{Credential, ProviderId};
+    use std::collections::HashMap;
+
+    #[test]
+    fn from_cred_trims_slash_and_defaults_base() {
+        let c = Credential {
+            api_key: Some("k".into()),
+            base_url: Some("http://example.com/v1/".into()),
+            ..Default::default()
+        };
+        let client = OpenAICompat::from_cred(&c, "m").unwrap();
+        assert_eq!(client.base_url, "http://example.com/v1");
+        assert_eq!(client.api_key.as_deref(), Some("k"));
+        assert_eq!(client.model, "m");
+
+        let bare = Credential::default();
+        let local = OpenAICompat::from_cred(&bare, "llama").unwrap();
+        assert_eq!(local.base_url, "http://127.0.0.1:11434/v1");
+    }
+
+    #[test]
+    fn pick_default_prefers_zen_over_local() {
+        let mut map = HashMap::new();
+        map.insert(
+            ProviderId::Zen,
+            Credential {
+                api_key: Some("z".into()),
+                ..Default::default()
+            },
+        );
+        map.insert(
+            ProviderId::Openai,
+            Credential {
+                api_key: Some("o".into()),
+                ..Default::default()
+            },
+        );
+        let (id, _) = pick_default(&map).unwrap();
+        assert_eq!(id, ProviderId::Zen);
+
+        map.insert(
+            ProviderId::Local,
+            Credential {
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                ..Default::default()
+            },
+        );
+        // Cloud key still wins over always-Ok local.
+        let (id, _) = pick_default(&map).unwrap();
+        assert_eq!(id, ProviderId::Zen);
+
+        map.remove(&ProviderId::Zen);
+        map.remove(&ProviderId::Openai);
+        let (id, _) = pick_default(&map).unwrap();
+        assert_eq!(id, ProviderId::Local);
+
+        assert!(pick_default(&HashMap::new()).is_none());
+    }
 }

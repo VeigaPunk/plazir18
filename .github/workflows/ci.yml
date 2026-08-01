@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: fmt
+        run: cargo fmt --check
+      - name: check (default)
+        run: cargo check --locked
+      - name: clippy (default)
+        run: cargo clippy --locked -- -D warnings
+      - name: test (default)
+        run: cargo test --locked
+
+  full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: check (full)
+        run: cargo check --features full --locked
+      - name: clippy (full)
+        run: cargo clippy --features full --locked -- -D warnings
+      - name: test (full)
+        run: cargo test --features full --locked

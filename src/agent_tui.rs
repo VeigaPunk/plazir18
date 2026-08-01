@@ -5,11 +5,11 @@ use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write
 use crate::auth::{self, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 use std::io;
 use std::time::Duration;
 
@@ -40,25 +40,23 @@ impl App {
                 ProviderId::Openai => "gpt-4o".to_string(),
                 ProviderId::Xai => "grok-3".to_string(),
             };
-            OpenAICompat::from_cred(&cred, model)
-                .ok()
-                .map(|c| (id, c))
+            OpenAICompat::from_cred(&cred, model).ok().map(|c| (id, c))
         });
         let session = Session::new("default");
         let status = match &provider {
             Some((id, c)) => format!(
-                "{} \u00b7 {} \u00b7 {} \u00b7 {}",
+                "{} \u{00b7} {} \u{00b7} {} \u{00b7} {}",
                 id.as_str(),
                 c.model,
                 mode_str(Mode::Build),
                 short_id(&session.id)
             ),
-            None => "no provider \u2014 /connect (Zen \u00b7 local \u00b7 OPENAI_API_KEY \u00b7 XAI_API_KEY)".into(),
+            None => "no provider \u{2014} /connect (Zen \u{00b7} local \u{00b7} OPENAI_API_KEY \u{00b7} XAI_API_KEY)".into(),
         };
         Self {
             messages: vec![ChatMessage {
                 role: "system".into(),
-                content: "You are plazir18, a minimal open coding agent (OpenCode \u00d7 titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.".into(),
+                content: "You are plazir18, a minimal open coding agent (OpenCode \u{00d7} titanium). Be concise. Prefer action. When the user pastes @path, treat the file contents as context.".into(),
             }],
             input: String::new(),
             status,
@@ -71,7 +69,7 @@ impl App {
     }
 
     fn help_text() -> &'static str {
-        "/help /clear /connect /models /mode /session /sessions /new /init /q  \u00b7  !bash !read !ls  \u00b7  @file"
+        "/help /clear /connect /models /mode /session /sessions /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
     }
 
     fn handle_slash(&mut self, cmd: &str) {
@@ -92,24 +90,34 @@ impl App {
                     _ => Mode::Build,
                 };
                 self.refresh_status();
-                self.push_assistant(format!("mode \u2192 {}", mode_str(self.mode)));
+                self.push_assistant(format!("mode \u{2192} {}", mode_str(self.mode)));
             }
             "connect" => {
-                for p in auth::builtin_providers() {
-                    if let Ok(cred) = p.login() {
-                        let _ = auth::save(p.id(), cred.clone());
-                        let model = match p.id() {
-                            ProviderId::Local => "llama3.2",
-                            ProviderId::Zen => "gpt-5.1-codex",
-                            ProviderId::Openai => "gpt-4o",
-                            ProviderId::Xai => "grok-3",
-                        };
-                        if let Ok(client) = OpenAICompat::from_cred(&cred, model) {
-                            self.provider = Some((p.id(), client));
-                            self.refresh_status();
-                            self.push_assistant(format!("connected {}", p.display_name()));
-                            return;
-                        }
+                let providers = auth::builtin_providers();
+                let picked = auth::try_connect_providers(|id| {
+                    providers
+                        .iter()
+                        .find(|p| p.id() == id)
+                        .and_then(|p| p.login().ok())
+                });
+                if let Some((id, cred)) = picked {
+                    let _ = auth::save(id, cred.clone());
+                    let model = match id {
+                        ProviderId::Local => "llama3.2",
+                        ProviderId::Zen => "gpt-5.1-codex",
+                        ProviderId::Openai => "gpt-4o",
+                        ProviderId::Xai => "grok-3",
+                    };
+                    if let Ok(client) = OpenAICompat::from_cred(&cred, model) {
+                        let name = providers
+                            .iter()
+                            .find(|p| p.id() == id)
+                            .map(|p| p.display_name().to_string())
+                            .unwrap_or_else(|| id.as_str().to_string());
+                        self.provider = Some((id, client));
+                        self.refresh_status();
+                        self.push_assistant(format!("connected {name}"));
+                        return;
                     }
                 }
                 self.push_assistant(
@@ -124,7 +132,7 @@ impl App {
                 self.push_assistant(msg);
             }
             "session" => self.push_assistant(format!(
-                "session {} \u2014 {} msgs",
+                "session {} \u{2014} {} msgs",
                 self.session.id,
                 self.messages.iter().filter(|m| m.role != "system").count()
             )),
@@ -156,7 +164,7 @@ impl App {
                 let _ = self.persist();
                 self.quit = true;
             }
-            _ => self.push_assistant(format!("unknown /{head} \u2014 try /help")),
+            _ => self.push_assistant(format!("unknown /{head} \u{2014} try /help")),
         }
     }
 
@@ -175,13 +183,13 @@ impl App {
     fn refresh_status(&mut self) {
         self.status = match &self.provider {
             Some((id, c)) => format!(
-                "{} \u00b7 {} \u00b7 {} \u00b7 {}",
+                "{} \u{00b7} {} \u{00b7} {} \u{00b7} {}",
                 id.as_str(),
                 c.model,
                 mode_str(self.mode),
                 short_id(&self.session.id)
             ),
-            None => "no provider \u2014 /connect".into(),
+            None => "no provider \u{2014} /connect".into(),
         };
     }
 
@@ -293,36 +301,50 @@ fn ui(f: &mut Frame, app: &App) {
     f.render_widget(status, chunks[2]);
 }
 
+/// Restores the terminal on drop so `?` / panic paths leave the TTY usable.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
+
 pub fn run() -> io::Result<()> {
+    use std::io::IsTerminal;
+    if !io::stdin().is_terminal() {
+        return Err(io::Error::other(
+            "agent TUI requires a TTY (stdin is not a terminal)",
+        ));
+    }
     let mut terminal = ratatui::init();
+    let _guard = TerminalGuard;
     let mut app = App::new();
-    let res = loop {
+    loop {
         terminal.draw(|f| ui(f, &app))?;
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') if app.input.is_empty() => {
+                    let _ = app.persist();
+                    app.quit = true;
                 }
-                match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') if app.input.is_empty() => {
-                        let _ = app.persist();
-                        app.quit = true;
-                    }
-                    KeyCode::Enter => app.send(),
-                    KeyCode::Char(c) => app.input.push(c),
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                    }
-                    KeyCode::Up => app.scroll = app.scroll.saturating_add(1),
-                    KeyCode::Down => app.scroll = app.scroll.saturating_sub(1),
-                    _ => {}
+                KeyCode::Enter => app.send(),
+                KeyCode::Char(c) => app.input.push(c),
+                KeyCode::Backspace => {
+                    app.input.pop();
                 }
+                KeyCode::Up => app.scroll = app.scroll.saturating_add(1),
+                KeyCode::Down => app.scroll = app.scroll.saturating_sub(1),
+                _ => {}
             }
         }
         if app.quit {
-            break Ok(());
+            return Ok(());
         }
-    };
-    ratatui::restore();
-    res
+    }
 }

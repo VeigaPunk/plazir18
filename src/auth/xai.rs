@@ -28,10 +28,7 @@ impl AuthProvider for XaiAuth {
                 ..Default::default()
             });
         }
-        Err(
-            "set XAI_API_KEY (or GROK_API_KEY), or complete browser PKCE at accounts.x.ai"
-                .into(),
-        )
+        Err("set XAI_API_KEY (or GROK_API_KEY), or complete browser PKCE at accounts.x.ai".into())
     }
 
     fn authorization_header(&self, cred: &Credential) -> Option<String> {

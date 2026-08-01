@@ -3,7 +3,10 @@
 use crate::provider::ChatMessage;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -17,7 +20,7 @@ pub struct Session {
 impl Session {
     pub fn new(title: impl Into<String>) -> Self {
         let now = now_secs();
-        let id = format!("s-{now}");
+        let id = new_session_id();
         Self {
             id,
             title: title.into(),
@@ -28,19 +31,32 @@ impl Session {
     }
 }
 
-fn now_secs() -> u64 {
+/// Unique id: `s-{secs}-{nanos}-{seq}` so same-second `Session::new` never collides.
+fn new_session_id() -> String {
+    let (secs, nanos) = now_parts();
+    let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("s-{secs}-{nanos}-{seq}")
+}
+
+fn now_parts() -> (u64, u32) {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map(|d| (d.as_secs(), d.subsec_nanos()))
+        .unwrap_or((0, 0))
+}
+
+fn now_secs() -> u64 {
+    now_parts().0
 }
 
 fn sessions_dir() -> PathBuf {
+    // Test / override hook: isolated path without mutating XDG_DATA_HOME.
+    if let Some(dir) = std::env::var_os("PLAZIR18_SESSIONS_DIR") {
+        return PathBuf::from(dir);
+    }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("plazir18").join("sessions")
 }
@@ -59,13 +75,13 @@ impl SessionStore {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(raw) = std::fs::read_to_string(&path) {
-                if let Ok(s) = serde_json::from_str::<Session>(&raw) {
-                    out.push(s);
-                }
+            if let Ok(raw) = std::fs::read_to_string(&path)
+                && let Ok(s) = serde_json::from_str::<Session>(&raw)
+            {
+                out.push(s);
             }
         }
-        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        out.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         out
     }
 
@@ -79,17 +95,65 @@ impl SessionStore {
         std::fs::write(path, pretty).map_err(|e| e.to_string())
     }
 
+    /// Load a session by id (API surface for multi-session UI).
+    #[allow(dead_code)]
     pub fn load(id: &str) -> Option<Session> {
         let path = sessions_dir().join(format!("{id}.json"));
         let raw = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&raw).ok()
     }
 
+    /// Delete a session file by id.
+    #[allow(dead_code)]
     pub fn delete(id: &str) -> Result<(), String> {
         let path = sessions_dir().join(format!("{id}.json"));
         if path.exists() {
             std::fs::remove_file(path).map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Serialise PLAZIR18_SESSIONS_DIR mutation (process-global env).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn save_list_load_delete_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("plazir18-sess-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Prefer dedicated override so we never touch XDG_DATA_HOME.
+        // SAFETY: held under ENV_LOCK; cleaned up before release.
+        unsafe {
+            std::env::set_var("PLAZIR18_SESSIONS_DIR", &dir);
+        }
+        let s = Session::new("t1");
+        let id = s.id.clone();
+        SessionStore::save(&s).unwrap();
+        let listed = SessionStore::list();
+        assert!(listed.iter().any(|x| x.id == id));
+        let loaded = SessionStore::load(&id).expect("load");
+        assert_eq!(loaded.title, "t1");
+        SessionStore::delete(&id).unwrap();
+        assert!(SessionStore::load(&id).is_none());
+        unsafe {
+            std::env::remove_var("PLAZIR18_SESSIONS_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_ids_unique_same_second() {
+        let a = Session::new("a");
+        let b = Session::new("b");
+        assert_ne!(a.id, b.id);
+        assert!(a.id.starts_with("s-"));
+        assert!(b.id.starts_with("s-"));
     }
 }

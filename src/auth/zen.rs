@@ -17,7 +17,8 @@ impl AuthProvider for ZenAuth {
         let key = std::env::var("OPENCODE_ZEN_API_KEY")
             .or_else(|_| std::env::var("PLAZIR_ZEN_KEY"))
             .map_err(|_| {
-                "set OPENCODE_ZEN_API_KEY or use /connect (visit https://opencode.ai/auth)".into()
+                "set OPENCODE_ZEN_API_KEY or use /connect (visit https://opencode.ai/auth)"
+                    .to_string()
             })?;
         Ok(Credential {
             api_key: Some(key),

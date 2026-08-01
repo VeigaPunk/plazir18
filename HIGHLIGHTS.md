@@ -2,18 +2,20 @@
 
 ## What it looks like
 
-Default window is a 3440×58 top strip. The compositor persists user-resized
-geometry in `~/.local/share/agent-wall/state.json`; the verified persisted state
-during this build run was **360×300 at (1540, 583)** on DP-1.
+**Default** is the multi-panel **18-tile grid** (adaptive columns up to 6×3 at
+capacity), not the legacy strip. Prefer `cargo run` with no flags for the
+dashboard; use `--strip` for the compact top bar.
 
-The overlay is a dark navy (`#0b0e14`) panel with compact 220×28 horizontal
-tiles, one per live tmux session. Each tile shows:
+The legacy strip is a thin horizontal bar of compact tiles (historically
+tuned around ultrawide widths). The compositor can persist user-resized
+geometry in `~/.local/share/agent-wall/state.json`.
+
+The overlay is a dark navy (`#0b0e14`) panel. Each tile shows:
 
 - A green dot (`#3ee08b`) when a client is attached, hollow border otherwise.
-- Session name in 9 pt proportional pale blue-grey (`#c9d6e6`).
-- Last 2 non-empty pane lines in 9 pt monospace muted grey (`#8b95ab`),
-  right-aligned to the row's right half.
-- A one-line footer: `"N sessions · Xs ago"` or `"no sessions"`.
+- Session name in proportional pale blue-grey (`#c9d6e6`).
+- Last non-empty pane lines in monospace muted grey (`#8b95ab`).
+- Footer status (session count / idle age) or `"no sessions"`.
 
 ## Toggle behaviour
 
@@ -26,15 +28,19 @@ tiles, one per live tmux session. Each tile shows:
 - **Other compositors** — Unix socket IPC: sends `toggle\n` to the running
   instance and flips `ViewportCommand::Minimized`.
 
-## Screenshot evidence
+## Screenshot evidence (historical strip verification)
 
-**Hidden:** special:agent-wall dismissed from DP-1 monitor stack; the 1540,583
-360×300 region shows only the background workspace. Window process alive but
+**Hidden:** special:agent-wall dismissed from DP-1 monitor stack; a prior
+360×300 region showed only the background workspace. Window process alive but
 off-screen; `acceptsInput: true` has no effect while the special workspace is
 not shown.
 
-**Revealed:** `hyprctl clients -j` confirms `size: [360,300]`, `at: [1540,583]`,
-`workspace: {id:-98, name:special:agent-wall}`, `visible: true`, `hidden: false`.
-The `/tmp/agentwall_revealed.png` crop shows the actual dark overlay with two
-session rows (green attach dot, name, pane tail) and the `2 sessions · 0s ago`
-footer.
+**Revealed:** `hyprctl clients -j` confirmed size/position on
+`special:agent-wall`. Crop evidence showed dark overlay with session rows
+(green attach dot, name, pane tail) and a `N sessions · Xs ago` footer.
+
+## Dual-mode note
+
+Wall is default. Coding agent: `cargo run --features agent -- --agent`
+(see README). Agent feature compiles and unit-tests under `--features full`;
+interactive provider E2E remains roadmap.
