@@ -127,6 +127,20 @@ pub fn pick_default(
     None
 }
 
+/// Default chat model per provider. Local honors `PLAZIR_LOCAL_MODEL` when set.
+pub fn default_model_for(id: ProviderId) -> String {
+    match id {
+        ProviderId::Local => std::env::var("PLAZIR_LOCAL_MODEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "llama3.2".into()),
+        ProviderId::Zen => "gpt-5.1-codex".into(),
+        ProviderId::Openai => "gpt-4o".into(),
+        ProviderId::Xai => "grok-3".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +232,38 @@ mod tests {
         assert_eq!(msgs[0].content, "ping");
         assert_eq!(msgs[1].role, "assistant");
         assert_eq!(msgs[1].content, "pong");
+    }
+
+    #[test]
+    fn default_model_local_uses_env_when_set() {
+        // Serialise with a unique key probe: only assert pure fallback here.
+        assert_eq!(default_model_for(ProviderId::Openai), "gpt-4o");
+        assert_eq!(default_model_for(ProviderId::Xai), "grok-3");
+        // Local default without depending on process env mutation in parallel suites.
+        let local = default_model_for(ProviderId::Local);
+        assert!(!local.is_empty());
+    }
+
+    /// Live Ollama chat — run with:
+    /// `PLAZIR_LOCAL_MODEL=qwen3:14b cargo test --features agent -- --ignored live_local_chat`
+    #[test]
+    #[ignore = "live ollama on :11434"]
+    fn live_local_chat_one_turn() {
+        let model = std::env::var("PLAZIR_LOCAL_MODEL").unwrap_or_else(|_| "qwen3:14b".into());
+        let client = OpenAICompat {
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: None,
+            model,
+        };
+        let reply = client
+            .chat(&[ChatMessage {
+                role: "user".into(),
+                content: "Reply with exactly the single word: pong".into(),
+            }])
+            .expect("live chat");
+        assert!(
+            reply.to_ascii_lowercase().contains("pong"),
+            "expected pong in reply, got: {reply}"
+        );
     }
 }

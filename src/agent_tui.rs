@@ -34,12 +34,7 @@ impl App {
     fn new() -> Self {
         let creds = auth::load_all().unwrap_or_default();
         let provider = provider::pick_default(&creds).and_then(|(id, cred)| {
-            let model = match id {
-                ProviderId::Local => "llama3.2".to_string(),
-                ProviderId::Zen => "gpt-5.1-codex".to_string(),
-                ProviderId::Openai => "gpt-4o".to_string(),
-                ProviderId::Xai => "grok-3".to_string(),
-            };
+            let model = provider::default_model_for(id);
             OpenAICompat::from_cred(&cred, model).ok().map(|c| (id, c))
         });
         let session = Session::new("default");
@@ -102,12 +97,7 @@ impl App {
                 });
                 if let Some((id, cred)) = picked {
                     let _ = auth::save(id, cred.clone());
-                    let model = match id {
-                        ProviderId::Local => "llama3.2",
-                        ProviderId::Zen => "gpt-5.1-codex",
-                        ProviderId::Openai => "gpt-4o",
-                        ProviderId::Xai => "grok-3",
-                    };
+                    let model = provider::default_model_for(id);
                     if let Ok(client) = OpenAICompat::from_cred(&cred, model) {
                         let name = providers
                             .iter()
@@ -121,7 +111,7 @@ impl App {
                     }
                 }
                 self.push_assistant(
-                    "no credentials.\n  Zen:   OPENCODE_ZEN_API_KEY / PLAZIR_ZEN_KEY  (opencode.ai/auth)\n  Local: PLAZIR_LOCAL_BASE / PLAZIR_LOCAL_KEY (default :11434); PLAZIR_LOCAL=prefer; loopback OPENAI_BASE_URL handed to Local\n  OpenAI: OPENAI_API_KEY (+ remote OPENAI_BASE_URL)\n  Grok:  XAI_API_KEY / GROK_API_KEY",
+                    "no credentials.\n  Zen:   OPENCODE_ZEN_API_KEY / PLAZIR_ZEN_KEY  (opencode.ai/auth)\n  Local: PLAZIR_LOCAL_BASE / PLAZIR_LOCAL_KEY / PLAZIR_LOCAL_MODEL (default :11434 / llama3.2); PLAZIR_LOCAL=prefer; loopback OPENAI_BASE_URL handed to Local\n  OpenAI: OPENAI_API_KEY (+ remote OPENAI_BASE_URL)\n  Grok:  XAI_API_KEY / GROK_API_KEY",
                 );
             }
             "models" => {

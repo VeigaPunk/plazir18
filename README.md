@@ -81,10 +81,11 @@ Agent needs a provider key or local endpoint. `/connect` tries cloud keys first 
 | `OPENAI_API_KEY` (+ optional remote `OPENAI_BASE_URL`) | OpenAI cloud |
 | `XAI_API_KEY` / `GROK_API_KEY` | Grok |
 | `PLAZIR_LOCAL_BASE` / `PLAZIR_LOCAL_KEY` | Local (Ollama, etc.) |
+| `PLAZIR_LOCAL_MODEL` | Local chat model (default `llama3.2`) |
 | `PLAZIR_LOCAL=1\|true\|prefer` | Force Local-first |
 | Loopback `OPENAI_BASE_URL` | Rejected by OpenAI path; handed to Local base |
 
-Interactive chat E2E is still roadmap; compile + unit tests are gated.
+Offline M6 units cover parse + session turn; live Ollama: `PLAZIR_LOCAL_MODEL=… cargo test --features agent -- --ignored live_local_chat`.
 
 ## Build & deploy (Windows)
 
@@ -102,7 +103,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked                              # 71 pass, 2 ignored (live tmux)
 cargo clippy --features full --locked --all-targets -- -D warnings
-cargo test --features full --locked              # 111 pass, 2 ignored (live tmux)
+cargo test --features full --locked              # 112 pass, 3 ignored (live tmux + ollama)
 # rust-version = "1.85" (edition 2024); agent !bash tools timeout at 30s
 cargo run --locked -- --status-json
 cargo run --locked -- --status-pango
