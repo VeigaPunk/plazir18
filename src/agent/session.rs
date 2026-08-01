@@ -346,12 +346,16 @@ mod tests {
         assert!(md.contains("hello-export"));
         let imported = SessionStore::import_json(&json_path, true).unwrap();
         assert_ne!(imported.id, s.id);
-        assert!(imported.messages.iter().any(|m| m.content == "hello-export"));
+        assert!(
+            imported
+                .messages
+                .iter()
+                .any(|m| m.content == "hello-export")
+        );
         SessionStore::delete(&imported.id).unwrap();
         unsafe {
             std::env::remove_var("PLAZIR18_SESSIONS_DIR");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

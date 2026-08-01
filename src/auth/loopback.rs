@@ -170,8 +170,18 @@ mod tests {
         let addr_client = addr;
         let handle =
             thread::spawn(move || wait_for_oauth_callback(&addr_s, Duration::from_secs(5)));
-        thread::sleep(Duration::from_millis(80));
-        let mut s = TcpStream::connect_timeout(&addr_client, Duration::from_secs(2)).unwrap();
+        // Retry connect until listener is up (bind race on free port).
+        let mut s = None;
+        for _ in 0..100 {
+            match TcpStream::connect_timeout(&addr_client, Duration::from_millis(50)) {
+                Ok(stream) => {
+                    s = Some(stream);
+                    break;
+                }
+                Err(_) => thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        let mut s = s.expect("listener should accept within ~1s");
         let req = "GET /auth/callback?code=testcode&state=teststate HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
         s.write_all(req.as_bytes()).unwrap();
         let mut resp = String::new();
@@ -184,10 +194,22 @@ mod tests {
 
     #[test]
     fn wait_times_out_when_no_client() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap().to_string();
-        drop(listener);
-        let err = wait_for_oauth_callback(&addr, Duration::from_millis(200)).unwrap_err();
+        // Bind an ephemeral port, release it, then wait with a short timeout.
+        // If bind races, retry a few free ports.
+        let mut err = String::new();
+        for _ in 0..5 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            drop(listener);
+            match wait_for_oauth_callback(&addr, Duration::from_millis(200)) {
+                Err(e) if e.contains("timed out") => {
+                    err = e;
+                    break;
+                }
+                Err(e) => err = e, // bind race; try another port
+                Ok(_) => panic!("expected timeout without client"),
+            }
+        }
         assert!(err.contains("timed out"), "{err}");
     }
 }
