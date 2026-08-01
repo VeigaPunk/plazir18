@@ -13,9 +13,9 @@
 | M6 | E2E local chat turn | partial (offline units; live ignore probes; `PLAZIR_LOCAL_MODEL`; auto-pick catalog model) | |
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |
 | M8 | Session persistence + multi-session | partial (store; unique ids; `/open` `/session <id>`; `/delete <id>`) | |
-| M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` 30s timeout + kill; unit-tested) | |
-| M10 | ChatGPT device-code OAuth | partial (PKCE pure helpers + authorize URL; network exchange pending) | |
-| M11 | Grok PKCE OAuth | partial (PKCE shared; authorize host constant; network exchange pending) | |
+| M9 | Tools (bash, read) + plan/build toggle | partial (tools + mode; `!bash` timeout; `!write path:content`; unit-tested) | |
+| M10 | ChatGPT device-code OAuth | partial (PKCE; token body/parse; network exchange; `/oauth` + `/oauth-code`; no loopback server) | |
+| M11 | Grok PKCE OAuth | partial (PKCE shared; authorize URL builder; network exchange still OpenAI-first) | |
 | M12 | `/init` AGENTS.md + `@file` + README polish | partial (helpers + README dual-mode env table) | |
 
 ## Acceptance

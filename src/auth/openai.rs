@@ -68,8 +68,11 @@ impl AuthProvider for OpenAiAuth {
     }
 }
 
+/// Default loopback redirect used by `/oauth` (must match token exchange).
+#[cfg(feature = "oauth")]
+pub const OPENAI_LOOPBACK_REDIRECT: &str = "http://127.0.0.1:1455/auth/callback";
+
 /// Start browser OAuth PKCE: returns (authorize_url, code_verifier, state).
-/// Token exchange is not wired yet (M10).
 #[cfg(feature = "oauth")]
 pub fn openai_browser_oauth_start(redirect_uri: &str) -> (String, String, String) {
     let verifier = super::pkce::generate_code_verifier();
@@ -88,6 +91,56 @@ pub fn openai_browser_oauth_start(redirect_uri: &str) -> (String, String, String
 #[cfg(feature = "oauth")]
 pub fn xai_authorize_url_hint() -> &'static str {
     super::pkce::XAI_AUTHORIZE_URL
+}
+
+/// POST authorization_code → tokens (network). Used by `/oauth-code`.
+#[cfg(feature = "oauth")]
+pub fn openai_exchange_code(
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> Result<super::Credential, String> {
+    let body = super::pkce::openai_token_exchange_body(code, redirect_uri, code_verifier);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(super::pkce::OPENAI_TOKEN_URL)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("token exchange {status}: {text}"));
+    }
+    let tokens = super::pkce::parse_oauth_token_json(&text)?;
+    Ok(super::pkce::credential_from_oauth_tokens(&tokens))
+}
+
+/// POST refresh_token → tokens (network).
+#[cfg(feature = "oauth")]
+pub fn openai_refresh_access_token(refresh_token: &str) -> Result<super::Credential, String> {
+    let body = super::pkce::openai_refresh_body(refresh_token);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(super::pkce::OPENAI_TOKEN_URL)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("token refresh {status}: {text}"));
+    }
+    let tokens = super::pkce::parse_oauth_token_json(&text)?;
+    Ok(super::pkce::credential_from_oauth_tokens(&tokens))
 }
 
 #[cfg(test)]

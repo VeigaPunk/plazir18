@@ -17,7 +17,10 @@ pub use xai::XaiAuth;
 pub use zen::ZenAuth;
 
 #[cfg(feature = "oauth")]
-pub use openai::{openai_browser_oauth_start, xai_authorize_url_hint};
+pub use openai::{
+    OPENAI_LOOPBACK_REDIRECT, openai_browser_oauth_start, openai_exchange_code,
+    openai_refresh_access_token, xai_authorize_url_hint,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

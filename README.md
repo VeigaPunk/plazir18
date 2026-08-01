@@ -64,7 +64,7 @@ Default build is the **wall** only. Optional features:
 | Feature | Enables |
 |---------|---------|
 | `agent` | `--agent` TUI, OpenAI-compatible providers, tools, sessions |
-| `oauth` | OAuth helpers (PKCE pure + deps; depends on `agent`) |
+| `oauth` | OAuth helpers (PKCE + token exchange; `/oauth` `/oauth-code`; depends on `agent`) |
 | `full` | `wall` + `agent` + `oauth` |
 
 ```bash

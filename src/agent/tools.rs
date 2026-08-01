@@ -17,8 +17,7 @@ pub enum Tool {
     Read {
         path: String,
     },
-    /// File write (scaffold; not yet wired from TUI).
-    #[allow(dead_code)]
+    /// File write (`!write path:content` from agent TUI).
     Write {
         path: String,
         content: String,
@@ -270,6 +269,32 @@ mod tests {
         );
         assert!(r.ok);
         assert_eq!(r.output, "ok");
+    }
+
+    #[test]
+    fn write_tool_creates_file() {
+        let dir = std::env::temp_dir().join(format!("plazir18-write-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("w.txt");
+        let path_s = path.to_string_lossy().to_string();
+        let r = run_tool(
+            Tool::Write {
+                path: path_s.clone(),
+                content: "hi-write".into(),
+            },
+            false,
+        );
+        assert!(r.ok, "{}", r.output);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi-write");
+        let blocked = run_tool(
+            Tool::Write {
+                path: path_s,
+                content: "no".into(),
+            },
+            true,
+        );
+        assert!(!blocked.ok);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

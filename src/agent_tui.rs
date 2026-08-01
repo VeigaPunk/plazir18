@@ -28,6 +28,9 @@ struct App {
     session: Session,
     scroll: u16,
     quit: bool,
+    /// Pending browser PKCE: (code_verifier, state). Feature oauth only.
+    #[cfg(feature = "oauth")]
+    oauth_pending: Option<(String, String)>,
 }
 
 impl App {
@@ -58,17 +61,19 @@ impl App {
             session,
             scroll: 0,
             quit: false,
+            #[cfg(feature = "oauth")]
+            oauth_pending: None,
         }
     }
 
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
-            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !ls  \u{00b7}  @file"
+            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !ls  \u{00b7}  @file"
         }
     }
 
@@ -121,12 +126,102 @@ impl App {
             }
             #[cfg(feature = "oauth")]
             "oauth" => {
-                let (url, _verifier, state) =
-                    auth::openai_browser_oauth_start("http://127.0.0.1:1455/auth/callback");
+                let (url, verifier, state) =
+                    auth::openai_browser_oauth_start(auth::OPENAI_LOOPBACK_REDIRECT);
+                self.oauth_pending = Some((verifier, state.clone()));
                 self.push_assistant(format!(
-                    "OpenAI browser PKCE (token exchange not wired \u{2014} M10).\nstate={state}\nopen:\n{url}\n\nxAI authorize host: {}",
+                    "OpenAI browser PKCE started.\n1) open:\n{url}\n2) after redirect, paste:\n   /oauth-code <callback-url-or-code> [state]\nstate={state}\nxAI host: {}",
                     auth::xai_authorize_url_hint()
                 ));
+            }
+            #[cfg(feature = "oauth")]
+            "oauth-code" => {
+                if arg.is_empty() {
+                    self.push_assistant(
+                        "usage: /oauth-code <callback-url|code> [state]  (run /oauth first)",
+                    );
+                } else {
+                    let Some((verifier, expect_state)) = self.oauth_pending.clone() else {
+                        self.push_assistant("no pending /oauth \u{2014} run /oauth first");
+                        return;
+                    };
+                    let (code, state) = if arg.contains('=') || arg.contains('?') {
+                        match auth::pkce::parse_oauth_callback_query(arg) {
+                            Ok(pair) => pair,
+                            Err(e) => {
+                                self.push_assistant(e);
+                                return;
+                            }
+                        }
+                    } else {
+                        let mut parts = arg.splitn(2, ' ');
+                        let code = parts.next().unwrap_or("").trim().to_string();
+                        let state = parts
+                            .next()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(expect_state.as_str())
+                            .to_string();
+                        if code.is_empty() {
+                            self.push_assistant("missing code");
+                            return;
+                        }
+                        (code, state)
+                    };
+                    if state != expect_state {
+                        self.push_assistant(format!(
+                            "state mismatch (got {state}, expected {expect_state})"
+                        ));
+                        return;
+                    }
+                    match auth::openai_exchange_code(
+                        &code,
+                        auth::OPENAI_LOOPBACK_REDIRECT,
+                        &verifier,
+                    ) {
+                        Ok(cred) => {
+                            let _ = auth::save(ProviderId::Openai, cred.clone());
+                            match provider::client_for(ProviderId::Openai, &cred) {
+                                Ok(client) => {
+                                    self.provider = Some((ProviderId::Openai, client));
+                                    self.oauth_pending = None;
+                                    self.refresh_status();
+                                    self.push_assistant(
+                                        "OpenAI OAuth connected (tokens saved to auth store)",
+                                    );
+                                }
+                                Err(e) => self.push_assistant(format!("client build failed: {e}")),
+                            }
+                        }
+                        Err(e) => self.push_assistant(format!("token exchange failed: {e}")),
+                    }
+                }
+            }
+            #[cfg(feature = "oauth")]
+            "oauth-refresh" => {
+                let stored = auth::load_all().unwrap_or_default();
+                let Some(cred) = stored.get(&ProviderId::Openai) else {
+                    self.push_assistant("no saved openai credential \u{2014} /oauth first");
+                    return;
+                };
+                let Some(rt) = cred.refresh_token.as_deref().filter(|s| !s.is_empty()) else {
+                    self.push_assistant("openai credential has no refresh_token");
+                    return;
+                };
+                match auth::openai_refresh_access_token(rt) {
+                    Ok(new_cred) => {
+                        let _ = auth::save(ProviderId::Openai, new_cred.clone());
+                        match provider::client_for(ProviderId::Openai, &new_cred) {
+                            Ok(client) => {
+                                self.provider = Some((ProviderId::Openai, client));
+                                self.refresh_status();
+                                self.push_assistant("OpenAI token refreshed");
+                            }
+                            Err(e) => self.push_assistant(format!("client build failed: {e}")),
+                        }
+                    }
+                    Err(e) => self.push_assistant(format!("refresh failed: {e}")),
+                }
             }
             "model" => {
                 if arg.is_empty() {
@@ -291,6 +386,23 @@ impl App {
         if let Some(rest) = text.strip_prefix("!read ") {
             let r = run_tool(Tool::Read { path: rest.into() }, plan);
             self.push_assistant(format!("read {rest}:\n{}", r.output));
+            return true;
+        }
+        // !write path <<EOF body or !write path:content (single line)
+        if let Some(rest) = text.strip_prefix("!write ") {
+            let rest = rest.trim();
+            if let Some((path, content)) = rest.split_once(':') {
+                let r = run_tool(
+                    Tool::Write {
+                        path: path.trim().into(),
+                        content: content.to_string(),
+                    },
+                    plan,
+                );
+                self.push_assistant(format!("write {}:\n{}", path.trim(), r.output));
+                return true;
+            }
+            self.push_assistant("usage: !write path:content");
             return true;
         }
         if let Some(rest) = text.strip_prefix("!ls ") {

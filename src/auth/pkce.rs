@@ -89,6 +89,9 @@ fn urlencoding_encode(s: &str) -> String {
 /// xAI / SuperGrok authorize host (scaffold; full browser flow later).
 pub const XAI_AUTHORIZE_URL: &str = "https://accounts.x.ai/oauth/authorize";
 
+/// OpenAI token endpoint for authorization-code + PKCE exchange.
+pub const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+
 /// Build a PKCE authorize URL against the xAI host (client_id supplied by caller).
 pub fn xai_authorize_url(
     client_id: &str,
@@ -106,6 +109,123 @@ pub fn xai_authorize_url(
     push_q(&mut q, "code_challenge", code_challenge);
     push_q(&mut q, "code_challenge_method", "S256");
     format!("{XAI_AUTHORIZE_URL}?{q}")
+}
+
+/// application/x-www-form-urlencoded body for code→token exchange (PKCE).
+pub fn openai_token_exchange_body(code: &str, redirect_uri: &str, code_verifier: &str) -> String {
+    let mut body = String::new();
+    push_q(&mut body, "grant_type", "authorization_code");
+    push_q(&mut body, "client_id", OPENAI_OAUTH_CLIENT_ID);
+    push_q(&mut body, "code", code);
+    push_q(&mut body, "redirect_uri", redirect_uri);
+    push_q(&mut body, "code_verifier", code_verifier);
+    body
+}
+
+/// Refresh-token grant body (no browser).
+pub fn openai_refresh_body(refresh_token: &str) -> String {
+    let mut body = String::new();
+    push_q(&mut body, "grant_type", "refresh_token");
+    push_q(&mut body, "client_id", OPENAI_OAUTH_CLIENT_ID);
+    push_q(&mut body, "refresh_token", refresh_token);
+    body
+}
+
+/// Parse `code` + `state` from a callback URL or raw query string.
+pub fn parse_oauth_callback_query(input: &str) -> Result<(String, String), String> {
+    let q = if let Some(idx) = input.find('?') {
+        &input[idx + 1..]
+    } else {
+        input
+    };
+    let mut code = None;
+    let mut state = None;
+    for pair in q.split('&') {
+        let mut it = pair.splitn(2, '=');
+        let k = it.next().unwrap_or("");
+        let v = it.next().unwrap_or("");
+        let v = urlencoding_decode(v);
+        match k {
+            "code" if !v.is_empty() => code = Some(v),
+            "state" if !v.is_empty() => state = Some(v),
+            _ => {}
+        }
+    }
+    match (code, state) {
+        (Some(c), Some(s)) => Ok((c, s)),
+        (None, _) => Err("callback missing code".into()),
+        (_, None) => Err("callback missing state".into()),
+    }
+}
+
+fn urlencoding_decode(s: &str) -> String {
+    // Minimal decode for OAuth callback values (percent + '+').
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let h = |c: u8| -> Option<u8> {
+                    match c {
+                        b'0'..=b'9' => Some(c - b'0'),
+                        b'a'..=b'f' => Some(c - b'a' + 10),
+                        b'A'..=b'F' => Some(c - b'A' + 10),
+                        _ => None,
+                    }
+                };
+                if let (Some(a), Some(b)) = (h(bytes[i + 1]), h(bytes[i + 2])) {
+                    out.push((a << 4) | b);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Parsed token endpoint JSON (OpenAI-compatible OAuth).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OAuthTokenJson {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub token_type: Option<String>,
+}
+
+pub fn parse_oauth_token_json(body: &str) -> Result<OAuthTokenJson, String> {
+    serde_json::from_str(body).map_err(|e| e.to_string())
+}
+
+/// Map token JSON → [`crate::auth::Credential`] for OpenAI cloud base.
+pub fn credential_from_oauth_tokens(tokens: &OAuthTokenJson) -> crate::auth::Credential {
+    let expires_at = tokens.expires_in.map(|secs| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().saturating_add(secs))
+            .unwrap_or(secs)
+    });
+    crate::auth::Credential {
+        access_token: Some(tokens.access_token.clone()),
+        refresh_token: tokens.refresh_token.clone(),
+        expires_at,
+        base_url: Some("https://api.openai.com/v1".into()),
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +287,47 @@ mod tests {
     #[test]
     fn urlencoding_encodes_spaces() {
         assert_eq!(urlencoding_encode("a b"), "a%20b");
+    }
+
+    #[test]
+    fn token_exchange_body_has_grant_and_verifier() {
+        let b = openai_token_exchange_body("c0de", "http://127.0.0.1:1455/cb", "verif");
+        assert!(b.contains("grant_type=authorization_code"));
+        assert!(b.contains("code=c0de"));
+        assert!(b.contains("code_verifier=verif"));
+        assert!(b.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
+    }
+
+    #[test]
+    fn refresh_body_has_grant() {
+        let b = openai_refresh_body("rtok");
+        assert!(b.contains("grant_type=refresh_token"));
+        assert!(b.contains("refresh_token=rtok"));
+    }
+
+    #[test]
+    fn parse_callback_from_url_and_query() {
+        let (c, s) = parse_oauth_callback_query(
+            "http://127.0.0.1:1455/auth/callback?code=abc%2F1&state=xyz",
+        )
+        .unwrap();
+        assert_eq!(c, "abc/1");
+        assert_eq!(s, "xyz");
+        let (c2, s2) = parse_oauth_callback_query("code=z&state=s").unwrap();
+        assert_eq!(c2, "z");
+        assert_eq!(s2, "s");
+        assert!(parse_oauth_callback_query("state=only").is_err());
+    }
+
+    #[test]
+    fn parse_token_json_to_credential() {
+        let raw =
+            r#"{"access_token":"at","refresh_token":"rt","expires_in":3600,"token_type":"Bearer"}"#;
+        let t = parse_oauth_token_json(raw).unwrap();
+        let cred = credential_from_oauth_tokens(&t);
+        assert_eq!(cred.access_token.as_deref(), Some("at"));
+        assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
+        assert!(cred.expires_at.is_some());
+        assert_eq!(cred.base_url.as_deref(), Some("https://api.openai.com/v1"));
     }
 }
