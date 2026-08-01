@@ -5,9 +5,13 @@
 
 mod local;
 mod zen;
+mod openai;
+mod xai;
 
 pub use local::LocalAuth;
 pub use zen::ZenAuth;
+pub use openai::OpenAiAuth;
+pub use xai::XaiAuth;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -119,7 +123,12 @@ pub trait AuthProvider: Send + Sync {
 }
 
 pub fn builtin_providers() -> Vec<Box<dyn AuthProvider>> {
-    vec![Box::new(ZenAuth), Box::new(LocalAuth::default())]
+    vec![
+        Box::new(LocalAuth::default()),
+        Box::new(ZenAuth),
+        Box::new(OpenAiAuth),
+        Box::new(XaiAuth),
+    ]
 }
 
 #[cfg(test)]
