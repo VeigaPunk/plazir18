@@ -22,11 +22,13 @@ pub enum Tool {
         path: String,
         content: String,
     },
-    /// Replace first occurrence of `old` with `new` in file (`!edit path:old=>new`).
+    /// Replace occurrence(s) of `old` with `new` in file (`!edit` / `!editall`).
     Edit {
         path: String,
         old: String,
         new: String,
+        /// When true, replace all matches; else first only.
+        all: bool,
     },
     List {
         path: String,
@@ -166,7 +168,12 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
                 },
             }
         }
-        Tool::Edit { path, old, new } => {
+        Tool::Edit {
+            path,
+            old,
+            new,
+            all,
+        } => {
             if plan_mode {
                 return ToolResult {
                     ok: false,
@@ -181,17 +188,26 @@ pub fn run_tool(tool: Tool, plan_mode: bool) -> ToolResult {
             }
             match std::fs::read_to_string(&path) {
                 Ok(body) => {
-                    if !body.contains(&old) {
+                    let count = body.matches(&old).count();
+                    if count == 0 {
                         return ToolResult {
                             ok: false,
                             output: format!("edit: pattern not found in {path}"),
                         };
                     }
-                    let updated = body.replacen(&old, &new, 1);
+                    let n = if all { count } else { 1 };
+                    let updated = if all {
+                        body.replace(&old, &new)
+                    } else {
+                        body.replacen(&old, &new, 1)
+                    };
                     match std::fs::write(&path, updated) {
                         Ok(()) => ToolResult {
                             ok: true,
-                            output: format!("edited {path} (1 replacement)"),
+                            output: format!(
+                                "edited {path} ({n} replacement{})",
+                                if n == 1 { "" } else { "s" }
+                            ),
                         },
                         Err(e) => ToolResult {
                             ok: false,
@@ -354,16 +370,29 @@ mod tests {
                 path: path_s.clone(),
                 old: "aa".into(),
                 new: "XX".into(),
+                all: false,
             },
             false,
         );
         assert!(r.ok, "{}", r.output);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "XX bb aa");
+        let r2 = run_tool(
+            Tool::Edit {
+                path: path_s.clone(),
+                old: "aa".into(),
+                new: "ZZ".into(),
+                all: true,
+            },
+            false,
+        );
+        assert!(r2.ok, "{}", r2.output);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "XX bb ZZ");
         let blocked = run_tool(
             Tool::Edit {
                 path: path_s,
                 old: "bb".into(),
                 new: "YY".into(),
+                all: false,
             },
             true,
         );

@@ -119,11 +119,11 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
-            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !ls  \u{00b7}  @file"
+            "/help /clear /connect /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !editall !ls  \u{00b7}  @file"
         }
     }
 
@@ -702,8 +702,12 @@ impl App {
             self.push_assistant("usage: !write path:content");
             return true;
         }
-        // !edit path:old=>new  (first occurrence only)
-        if let Some(rest) = text.strip_prefix("!edit ") {
+        // !edit path:old=>new  (first) · !editall path:old=>new (all)
+        let edit_all = text.starts_with("!editall ");
+        if let Some(rest) = text
+            .strip_prefix("!editall ")
+            .or_else(|| text.strip_prefix("!edit "))
+        {
             let rest = rest.trim();
             if let Some((path, rest)) = rest.split_once(':')
                 && let Some((old, new)) = rest.split_once("=>")
@@ -713,13 +717,23 @@ impl App {
                         path: path.trim().into(),
                         old: old.to_string(),
                         new: new.to_string(),
+                        all: edit_all,
                     },
                     plan,
                 );
-                self.push_assistant(format!("edit {}:\n{}", path.trim(), r.output));
+                self.push_assistant(format!(
+                    "{} {}:\n{}",
+                    if edit_all { "editall" } else { "edit" },
+                    path.trim(),
+                    r.output
+                ));
                 return true;
             }
-            self.push_assistant("usage: !edit path:old=>new");
+            self.push_assistant(if edit_all {
+                "usage: !editall path:old=>new"
+            } else {
+                "usage: !edit path:old=>new"
+            });
             return true;
         }
         if let Some(rest) = text.strip_prefix("!ls ") {
