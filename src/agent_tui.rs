@@ -3,7 +3,7 @@
 
 use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
 use crate::auth::{self, ProviderId};
-use crate::provider::{self, ChatMessage, OpenAICompat};
+use crate::provider::{self, ChatMessage, OpenAICompat, apply_chat_turn};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -233,17 +233,30 @@ impl App {
             return;
         }
         let expanded = expand_at_files(&text);
-        self.messages.push(ChatMessage {
-            role: "user".into(),
-            content: expanded,
-        });
         let Some((_, client)) = &self.provider else {
+            self.messages.push(ChatMessage {
+                role: "user".into(),
+                content: expanded,
+            });
             self.push_assistant("not connected. /connect first.");
+            let _ = self.persist();
             return;
         };
-        match client.chat(&self.messages) {
-            Ok(reply) => self.push_assistant(reply),
-            Err(e) => self.push_assistant(format!("error: {e}")),
+        // Build request including the pending user turn without mutating yet.
+        let mut req = self.messages.clone();
+        req.push(ChatMessage {
+            role: "user".into(),
+            content: expanded.clone(),
+        });
+        match client.chat(&req) {
+            Ok(reply) => apply_chat_turn(&mut self.messages, expanded, reply),
+            Err(e) => {
+                self.messages.push(ChatMessage {
+                    role: "user".into(),
+                    content: expanded,
+                });
+                self.push_assistant(format!("error: {e}"));
+            }
         }
         let _ = self.persist();
     }

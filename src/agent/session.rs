@@ -156,4 +156,33 @@ mod tests {
         assert!(a.id.starts_with("s-"));
         assert!(b.id.starts_with("s-"));
     }
+
+    /// Offline M6: mock completion body → apply turn → persist/load session.
+    #[test]
+    fn m6_offline_one_chat_turn_persists() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let reply = crate::provider::parse_chat_completion_body(
+            r#"{"choices":[{"message":{"role":"assistant","content":"e2e-ok"}}]}"#,
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("plazir18-m6-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: held under ENV_LOCK; cleaned up before release.
+        unsafe {
+            std::env::set_var("PLAZIR18_SESSIONS_DIR", &dir);
+        }
+        let mut session = Session::new("m6");
+        crate::provider::apply_chat_turn(&mut session.messages, "hi", reply);
+        SessionStore::save(&session).unwrap();
+        let loaded = SessionStore::load(&session.id).expect("load");
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].content, "hi");
+        assert_eq!(loaded.messages[1].content, "e2e-ok");
+        SessionStore::delete(&session.id).unwrap();
+        unsafe {
+            std::env::remove_var("PLAZIR18_SESSIONS_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

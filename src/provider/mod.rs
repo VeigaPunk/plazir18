@@ -66,7 +66,7 @@ impl OpenAICompat {
             stream: false,
         };
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(60))
             .build()
             .map_err(|e| ProviderError::Http(e.to_string()))?;
         let mut req = client.post(&url).json(&body);
@@ -79,16 +79,40 @@ impl OpenAICompat {
             let text = resp.text().unwrap_or_default();
             return Err(ProviderError::Http(format!("{status}: {text}")));
         }
-        let parsed: ChatResponse = resp
-            .json()
+        let text = resp
+            .text()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
-        parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .ok_or(ProviderError::Empty)
+        parse_chat_completion_body(&text)
     }
+}
+
+/// Pure: extract first choice content from an OpenAI-compatible chat JSON body.
+/// Unit-tested without network (M6 scaffold path).
+pub fn parse_chat_completion_body(body: &str) -> Result<String, ProviderError> {
+    let parsed: ChatResponse =
+        serde_json::from_str(body).map_err(|e| ProviderError::Other(e.to_string()))?;
+    parsed
+        .choices
+        .into_iter()
+        .next()
+        .map(|c| c.message.content)
+        .ok_or(ProviderError::Empty)
+}
+
+/// Append a user turn + assistant reply into a session history (pure M6 helper).
+pub fn apply_chat_turn(
+    messages: &mut Vec<ChatMessage>,
+    user: impl Into<String>,
+    assistant: impl Into<String>,
+) {
+    messages.push(ChatMessage {
+        role: "user".into(),
+        content: user.into(),
+    });
+    messages.push(ChatMessage {
+        role: "assistant".into(),
+        content: assistant.into(),
+    });
 }
 
 /// Prefer cloud creds (Zen → OpenAI → xAI), Local last (always-present local stub).
@@ -163,5 +187,36 @@ mod tests {
         assert_eq!(id, ProviderId::Local);
 
         assert!(pick_default(&HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn parse_chat_completion_body_extracts_content() {
+        let body = r#"{
+          "choices": [
+            {"message": {"role": "assistant", "content": "hello-local"}}
+          ]
+        }"#;
+        let s = parse_chat_completion_body(body).unwrap();
+        assert_eq!(s, "hello-local");
+    }
+
+    #[test]
+    fn parse_chat_completion_body_empty_choices_errs() {
+        let body = r#"{"choices":[]}"#;
+        assert!(matches!(
+            parse_chat_completion_body(body),
+            Err(ProviderError::Empty)
+        ));
+    }
+
+    #[test]
+    fn apply_chat_turn_appends_user_then_assistant() {
+        let mut msgs = Vec::new();
+        apply_chat_turn(&mut msgs, "ping", "pong");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].content, "ping");
+        assert_eq!(msgs[1].role, "assistant");
+        assert_eq!(msgs[1].content, "pong");
     }
 }
