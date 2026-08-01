@@ -17,24 +17,47 @@ pub fn max_tool_rounds() -> usize {
         .unwrap_or(MAX_TOOL_ROUNDS)
 }
 
+fn env_truthy(name: &str) -> Option<bool> {
+    let v = std::env::var(name).ok()?;
+    let v = v.trim().to_ascii_lowercase();
+    if matches!(v.as_str(), "0" | "false" | "no" | "off") {
+        return Some(false);
+    }
+    if matches!(v.as_str(), "1" | "true" | "yes" | "on") {
+        return Some(true);
+    }
+    None
+}
+
 /// Tool-loop policy from env + provider.
 /// - `PLAZIR_TOOL_LOOP=1|true|yes|on` → always on  
 /// - `PLAZIR_TOOL_LOOP=0|false|no|off` → always off  
-/// - unset → **on for Local only**, unless `PLAZIR_CHAT_STREAM` prefers SSE (stream wins for live paint)
+/// - unset → **on for Local only** (independent of stream; see [`stream_after_tools_enabled`])
 pub fn tool_loop_enabled_for(provider: Option<crate::auth::ProviderId>) -> bool {
-    match std::env::var("PLAZIR_TOOL_LOOP") {
-        Ok(v) => {
-            let v = v.trim().to_ascii_lowercase();
-            if matches!(v.as_str(), "0" | "false" | "no" | "off") {
-                return false;
-            }
-            matches!(v.as_str(), "1" | "true" | "yes" | "on")
-        }
-        Err(_) => {
-            matches!(provider, Some(crate::auth::ProviderId::Local))
-                && !crate::provider::chat_stream_preferred()
-        }
+    match env_truthy("PLAZIR_TOOL_LOOP") {
+        Some(b) => b,
+        None => matches!(provider, Some(crate::auth::ProviderId::Local)),
     }
+}
+
+/// Opt-in: after tool rounds hit max, stream the no-tools final answer (SSE).
+/// Requires tools on + `PLAZIR_STREAM_AFTER_TOOLS=1` (or aliases) + stream preferred
+/// (`PLAZIR_CHAT_STREAM=1`). Does **not** stream when the model returns text in the
+/// same turn as finishing tools (`Done`); only the `NeedsFinal` path.
+pub fn stream_after_tools_enabled() -> bool {
+    // Dedicated opt-in (primary).
+    if env_truthy("PLAZIR_STREAM_AFTER_TOOLS") == Some(true)
+        || env_truthy("PLAZIR_TOOL_STREAM") == Some(true)
+    {
+        return crate::provider::chat_stream_preferred();
+    }
+    if env_truthy("PLAZIR_STREAM_AFTER_TOOLS") == Some(false)
+        || env_truthy("PLAZIR_TOOL_STREAM") == Some(false)
+    {
+        return false;
+    }
+    // Back-compat opt-in: both forced tool loop AND stream (explicit env, not defaults).
+    env_truthy("PLAZIR_TOOL_LOOP") == Some(true) && crate::provider::chat_stream_preferred()
 }
 
 /// Dispatch a named tool from model JSON arguments.
@@ -221,6 +244,20 @@ mod tests {
             assert!(!tool_loop_enabled_for(Some(
                 crate::auth::ProviderId::Openai
             )));
+        }
+    }
+
+    #[test]
+    fn stream_after_tools_opt_in_defaults_off() {
+        // Without opt-in env, stream-after-tools stays off (even if suite has CHAT_STREAM).
+        if std::env::var("PLAZIR_STREAM_AFTER_TOOLS").is_err()
+            && std::env::var("PLAZIR_TOOL_STREAM").is_err()
+            && std::env::var("PLAZIR_TOOL_LOOP").is_err()
+        {
+            assert!(
+                !stream_after_tools_enabled(),
+                "stream-after-tools must be opt-in by default"
+            );
         }
     }
 

@@ -3,7 +3,8 @@
 
 use crate::agent::{Session, SessionStore, Tool, expand_at_files, run_tool, write_agents_md};
 use crate::agent::{
-    ToolLoopOutcome, run_tool_loop, run_tool_loop_final, run_tool_rounds, tool_loop_enabled_for,
+    ToolLoopOutcome, run_tool_loop, run_tool_loop_final, run_tool_rounds,
+    stream_after_tools_enabled, tool_loop_enabled_for,
 };
 use crate::auth::{self, AuthProvider, ProviderId};
 use crate::provider::{self, ChatMessage, OpenAICompat, apply_chat_turn};
@@ -455,10 +456,12 @@ impl App {
                 let env = std::env::var("PLAZIR_TOOL_LOOP").unwrap_or_else(|_| "(unset)".into());
                 let max = crate::agent::tool_loop::max_tool_rounds();
                 let stream = provider::chat_stream_preferred();
+                let after = stream_after_tools_enabled();
                 self.push_assistant(format!(
-                    "tool loop: {} for provider {}\nPLAZIR_TOOL_LOOP={env}\nmax rounds: {max} (PLAZIR_TOOL_LOOP_MAX)\nstream preferred: {stream} (PLAZIR_CHAT_STREAM)\ndefault: Local=on, cloud=off unless env forces\ntools: bash read_file write_file list_dir edit_file",
+                    "tool loop: {} for provider {}\nPLAZIR_TOOL_LOOP={env}\nmax rounds: {max} (PLAZIR_TOOL_LOOP_MAX)\nstream preferred: {stream} (PLAZIR_CHAT_STREAM)\nstream after tools: {} (opt-in PLAZIR_STREAM_AFTER_TOOLS=1)\ndefault: Local tools on; cloud off\ntools: bash read_file write_file list_dir edit_file",
                     if on { "ON" } else { "OFF" },
-                    id.map(|i| i.as_str()).unwrap_or("none")
+                    id.map(|i| i.as_str()).unwrap_or("none"),
+                    if after { "ON" } else { "OFF" },
                 ));
             }
             "models" => {
@@ -826,9 +829,11 @@ impl App {
         let plan_mode = self.mode == Mode::Plan;
         let want_stream = provider::chat_stream_preferred();
         let want_tools = tool_loop_enabled_for(Some(id));
+        // Opt-in only: stream no-tools final after tool rounds hit max.
+        let stream_final = want_tools && stream_after_tools_enabled();
 
         if want_tools {
-            // Tool rounds (non-stream). Final answer may stream when PLAZIR_CHAT_STREAM=1.
+            // Tool rounds always non-stream. Final may SSE when stream_after_tools_enabled().
             self.messages = req;
             let phase = {
                 let client = &self.provider.as_ref().expect("checked").1;
@@ -858,7 +863,7 @@ impl App {
                     for n in notes {
                         self.push_assistant(format!("tool: {n}"));
                     }
-                    if want_stream {
+                    if stream_final {
                         // History already has user+tool turns; stream final no-tools answer.
                         let client = self.provider.as_ref().expect("checked").1.clone();
                         self.start_stream_from_history(self.messages.clone(), id, client);
@@ -1206,11 +1211,12 @@ pub fn run_once(prompt: &str) -> io::Result<()> {
     ];
     let use_tools = tool_loop_enabled_for(Some(id));
     let want_stream = provider::chat_stream_preferred();
+    let stream_final = use_tools && stream_after_tools_enabled();
     let progressive = want_stream && !use_tools;
     let chat_once = |c: &OpenAICompat, msgs: &mut Vec<ChatMessage>| {
         use std::io::Write;
-        if use_tools && want_stream {
-            // Tools then progressive final when NeedsFinal path is internal to final helper.
+        if use_tools && stream_final {
+            // Opt-in: tools then progressive SSE final on NeedsFinal only.
             let mut printed = false;
             let r = run_tool_loop_final(c, msgs, false, true, &mut |d| {
                 printed = true;
