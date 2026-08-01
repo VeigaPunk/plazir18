@@ -209,9 +209,20 @@ impl OpenAICompat {
     pub fn chat_stream_for_each(
         &self,
         messages: &[ChatMessage],
+        on_delta: impl FnMut(&str),
+    ) -> Result<String, ProviderError> {
+        self.chat_stream_for_each_cancel(messages, None, on_delta)
+    }
+
+    /// Like [`chat_stream_for_each`], but stops early when `cancel` is set.
+    pub fn chat_stream_for_each_cancel(
+        &self,
+        messages: &[ChatMessage],
+        cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         mut on_delta: impl FnMut(&str),
     ) -> Result<String, ProviderError> {
         use std::io::{BufRead, BufReader};
+        use std::sync::atomic::Ordering;
         let url = format!("{}/chat/completions", self.base_url);
         let body = ChatRequest {
             model: self.model.clone(),
@@ -239,6 +250,9 @@ impl OpenAICompat {
         let mut line = String::new();
         let mut raw_fallback = String::new();
         loop {
+            if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Ok(out);
+            }
             line.clear();
             let n = reader
                 .read_line(&mut line)

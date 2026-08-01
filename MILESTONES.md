@@ -8,7 +8,7 @@
 | M1 | `src/auth/` trait + Zen + Local + XDG store | **done** | Benjamin |
 | M2 | Cargo feature `agent` + reqwest/tokio/toml | **done** (compiles under `--features agent/full`) | team |
 | M3 | `provider::OpenAICompat` client (blocking) | **done** (scaffold; unit-light) | Grok/team |
-| M4 | Minimal agent TUI skeleton (`--agent`) | **scaffolded** (TTY guard; **SSE live token paint** when `PLAZIR_CHAT_STREAM=1`) | Grok/team |
+| M4 | Minimal agent TUI skeleton (`--agent`) | **scaffolded** (SSE live paint; **Esc cancels** in-flight stream) | Grok/team |
 | M5 | Wire `main.rs` `--agent`; keep `--tui` as wall | **scaffolded** (flag + feature gate; `--tui` TTY guard) | Grok/team |
 | M6 | E2E local chat turn | partial (`--agent-once`; **line-by-line SSE** + progressive stdout; tool loop Local default) | |
 | M7 | `/connect` + env providers | partial (Zen→OpenAI→xAI→Local; empty-key fallthrough; loopback→Local handoff; compose unit) | |

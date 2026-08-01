@@ -57,6 +57,8 @@ struct App {
     /// Index of the assistant bubble currently receiving stream deltas.
     stream_msg_idx: Option<usize>,
     stream_rx: Option<std::sync::mpsc::Receiver<StreamEvt>>,
+    /// Shared cancel flag for the background SSE thread (Esc).
+    stream_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Pending browser PKCE (feature oauth).
     #[cfg(feature = "oauth")]
     oauth_pending: Option<OAuthPending>,
@@ -120,6 +122,7 @@ impl App {
             quit: false,
             stream_msg_idx: None,
             stream_rx: None,
+            stream_cancel: None,
             #[cfg(feature = "oauth")]
             oauth_pending: None,
             #[cfg(feature = "oauth")]
@@ -906,11 +909,13 @@ impl App {
             ..Default::default()
         });
         self.stream_msg_idx = Some(self.messages.len() - 1);
-        self.status = format!("streaming \u{00b7} {}", id.as_str());
+        self.status = format!("streaming \u{00b7} {} \u{00b7} Esc cancel", id.as_str());
         let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.stream_cancel = Some(cancel.clone());
         self.stream_rx = Some(rx);
         std::thread::spawn(move || {
-            let r = client.chat_stream_for_each(&req, |delta| {
+            let r = client.chat_stream_for_each_cancel(&req, Some(cancel), |delta| {
                 let _ = tx.send(StreamEvt::Delta(delta.to_string()));
             });
             let done = match r {
@@ -919,6 +924,31 @@ impl App {
             };
             let _ = tx.send(done);
         });
+    }
+
+    /// Esc while streaming: stop reading deltas and mark partial reply cancelled.
+    fn cancel_stream(&mut self) {
+        if !self.is_streaming() {
+            return;
+        }
+        if let Some(c) = &self.stream_cancel {
+            c.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        if let Some(i) = self.stream_msg_idx
+            && let Some(m) = self.messages.get_mut(i)
+        {
+            if m.content.is_empty() {
+                m.content = "[cancelled]".into();
+            } else if !m.content.ends_with("[cancelled]") {
+                m.content.push_str("\n[cancelled]");
+            }
+        }
+        self.stream_rx = None;
+        self.stream_msg_idx = None;
+        self.stream_cancel = None;
+        self.refresh_status();
+        let _ = self.persist();
+        self.status = "stream cancelled".into();
     }
 
     fn poll_stream(&mut self) {
@@ -946,6 +976,7 @@ impl App {
                     }
                     self.stream_rx = None;
                     self.stream_msg_idx = None;
+                    self.stream_cancel = None;
                     self.refresh_status();
                     let _ = self.persist();
                     break;
@@ -964,6 +995,7 @@ impl App {
                     }
                     self.stream_rx = None;
                     self.stream_msg_idx = None;
+                    self.stream_cancel = None;
                     self.refresh_status();
                     let _ = self.persist();
                     break;
@@ -972,6 +1004,7 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.stream_rx = None;
                     self.stream_msg_idx = None;
+                    self.stream_cancel = None;
                     self.refresh_status();
                     break;
                 }
@@ -1217,6 +1250,9 @@ pub fn run() -> io::Result<()> {
                 continue;
             }
             match key.code {
+                KeyCode::Esc if app.is_streaming() => {
+                    app.cancel_stream();
+                }
                 KeyCode::Esc | KeyCode::Char('q')
                     if app.input.is_empty() && !app.is_streaming() =>
                 {
