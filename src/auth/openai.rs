@@ -334,14 +334,19 @@ pub fn xai_poll_device_token(
 
 /// POST refresh_token → tokens (network).
 #[cfg(feature = "oauth")]
-pub fn openai_refresh_access_token(refresh_token: &str) -> Result<super::Credential, String> {
-    let body = super::pkce::openai_refresh_body(refresh_token);
+pub fn oauth_refresh_access_token(
+    token_url: &str,
+    client_id: &str,
+    refresh_token: &str,
+    api_base: &str,
+) -> Result<super::Credential, String> {
+    let body = super::pkce::oauth_refresh_body(client_id, refresh_token);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
-        .post(super::pkce::OPENAI_TOKEN_URL)
+        .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -352,10 +357,33 @@ pub fn openai_refresh_access_token(refresh_token: &str) -> Result<super::Credent
         return Err(format!("token refresh {status}: {text}"));
     }
     let tokens = super::pkce::parse_oauth_token_json(&text)?;
-    Ok(super::pkce::credential_from_oauth_tokens(
-        &tokens,
+    Ok(super::pkce::credential_from_oauth_tokens(&tokens, api_base))
+}
+
+#[cfg(feature = "oauth")]
+pub fn openai_refresh_access_token(refresh_token: &str) -> Result<super::Credential, String> {
+    oauth_refresh_access_token(
+        super::pkce::OPENAI_TOKEN_URL,
+        super::pkce::OPENAI_OAUTH_CLIENT_ID,
+        refresh_token,
         "https://api.openai.com/v1",
-    ))
+    )
+}
+
+/// xAI refresh. Requires `PLAZIR_XAI_OAUTH_CLIENT_ID` (same as authorize).
+#[cfg(feature = "oauth")]
+pub fn xai_refresh_access_token(refresh_token: &str) -> Result<super::Credential, String> {
+    let client_id = std::env::var("PLAZIR_XAI_OAUTH_CLIENT_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "set PLAZIR_XAI_OAUTH_CLIENT_ID for xAI refresh".to_string())?;
+    let token_url = std::env::var("PLAZIR_XAI_TOKEN_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| super::pkce::XAI_TOKEN_URL.to_string());
+    oauth_refresh_access_token(&token_url, &client_id, refresh_token, "https://api.x.ai/v1")
 }
 
 #[cfg(test)]

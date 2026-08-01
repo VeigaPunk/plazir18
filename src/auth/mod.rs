@@ -29,7 +29,7 @@ pub use openai::{
     OPENAI_LOOPBACK_REDIRECT, openai_browser_oauth_start, openai_exchange_code,
     openai_poll_device_token, openai_refresh_access_token, openai_request_device_code,
     xai_authorize_url_hint, xai_browser_oauth_start, xai_exchange_code, xai_poll_device_token,
-    xai_request_device_code,
+    xai_refresh_access_token, xai_request_device_code,
 };
 
 use serde::{Deserialize, Serialize};

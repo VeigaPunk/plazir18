@@ -64,14 +64,22 @@ impl App {
         let mut creds = auth::load_all().unwrap_or_default();
         #[cfg(feature = "oauth")]
         {
-            // Soft-refresh expired OpenAI tokens when a refresh_token is present.
-            if let Some(c) = creds.get(&ProviderId::Openai).cloned()
-                && auth::credential_expired(&c)
-                && let Some(rt) = c.refresh_token.as_deref().filter(|s| !s.is_empty())
-                && let Ok(fresh) = auth::openai_refresh_access_token(rt)
-            {
-                let _ = auth::save(ProviderId::Openai, fresh.clone());
-                creds.insert(ProviderId::Openai, fresh);
+            // Soft-refresh expired cloud tokens when a refresh_token is present.
+            for id in [ProviderId::Openai, ProviderId::Xai] {
+                if let Some(c) = creds.get(&id).cloned()
+                    && auth::credential_expired(&c)
+                    && let Some(rt) = c.refresh_token.as_deref().filter(|s| !s.is_empty())
+                {
+                    let refreshed = match id {
+                        ProviderId::Openai => auth::openai_refresh_access_token(rt).ok(),
+                        ProviderId::Xai => auth::xai_refresh_access_token(rt).ok(),
+                        _ => None,
+                    };
+                    if let Some(fresh) = refreshed {
+                        let _ = auth::save(id, fresh.clone());
+                        creds.insert(id, fresh);
+                    }
+                }
             }
         }
         let provider = provider::pick_default(&creds)
@@ -111,7 +119,7 @@ impl App {
     fn help_text() -> &'static str {
         #[cfg(feature = "oauth")]
         {
-            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !ls  \u{00b7}  @file"
+            "/help /clear /connect /oauth /oauth-device [xai] /oauth-xai /oauth-wait /oauth-code /oauth-refresh [xai] /models /model <id> /mode /session /sessions /open <id> /delete <id> /new /init /q  \u{00b7}  !bash !read !write !edit !ls  \u{00b7}  @file"
         }
         #[cfg(not(feature = "oauth"))]
         {
@@ -364,23 +372,43 @@ impl App {
             }
             #[cfg(feature = "oauth")]
             "oauth-refresh" => {
+                let want_xai = arg.eq_ignore_ascii_case("xai") || arg.eq_ignore_ascii_case("grok");
+                let id = if want_xai {
+                    ProviderId::Xai
+                } else if let Some((active, _)) = &self.provider {
+                    if *active == ProviderId::Xai {
+                        ProviderId::Xai
+                    } else {
+                        ProviderId::Openai
+                    }
+                } else {
+                    ProviderId::Openai
+                };
                 let stored = auth::load_all().unwrap_or_default();
-                let Some(cred) = stored.get(&ProviderId::Openai) else {
-                    self.push_assistant("no saved openai credential \u{2014} /oauth first");
+                let Some(cred) = stored.get(&id) else {
+                    self.push_assistant(format!(
+                        "no saved {} credential \u{2014} /oauth first",
+                        id.as_str()
+                    ));
                     return;
                 };
                 let Some(rt) = cred.refresh_token.as_deref().filter(|s| !s.is_empty()) else {
-                    self.push_assistant("openai credential has no refresh_token");
+                    self.push_assistant(format!("{} credential has no refresh_token", id.as_str()));
                     return;
                 };
-                match auth::openai_refresh_access_token(rt) {
+                let refreshed = match id {
+                    ProviderId::Openai => auth::openai_refresh_access_token(rt),
+                    ProviderId::Xai => auth::xai_refresh_access_token(rt),
+                    _ => Err("refresh only for openai/xai".into()),
+                };
+                match refreshed {
                     Ok(new_cred) => {
-                        let _ = auth::save(ProviderId::Openai, new_cred.clone());
-                        match provider::client_for(ProviderId::Openai, &new_cred) {
+                        let _ = auth::save(id, new_cred.clone());
+                        match provider::client_for(id, &new_cred) {
                             Ok(client) => {
-                                self.provider = Some((ProviderId::Openai, client));
+                                self.provider = Some((id, client));
                                 self.refresh_status();
-                                self.push_assistant("OpenAI token refreshed");
+                                self.push_assistant(format!("{} token refreshed", id.as_str()));
                             }
                             Err(e) => self.push_assistant(format!("client build failed: {e}")),
                         }
@@ -743,7 +771,7 @@ impl App {
         let result = match first {
             Ok(reply) => Ok(reply),
             Err(e) if e.is_unauthorized() => {
-                // One-shot OAuth refresh + retry (OpenAI only; needs refresh_token in store).
+                // One-shot OAuth refresh + retry (OpenAI/xAI; needs refresh_token in store).
                 if self.try_refresh_active_provider(id) {
                     if let Some((_, client)) = &self.provider {
                         client.chat(&req)
