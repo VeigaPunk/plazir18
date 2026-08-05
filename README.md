@@ -1,9 +1,20 @@
-# plazir18 (agent-wall)
+# plazir18
 
 Multi-panel agent terminal dashboard in Rust (eframe/egui): one **panel per live
 tmux session**, up to **18 concurrent** tiles in a grid. Capacity layout is
 **6 columns × 3 rows**. Live pane tails, DPI-aware rendering, always-on-top
 optional.
+
+| Name | What it is |
+|------|------------|
+| **plazir18** | Product / repo / installed CLI name (`~/.local/bin/plazir18`) |
+| **`agent-wall`** | Cargo package and release binary (`target/release/agent-wall`) |
+
+Install renames the crate binary to the product command:
+
+```bash
+install -Dm755 target/release/agent-wall ~/.local/bin/plazir18
+```
 
 **tmux is a must** — sessions only get a tile if they run inside tmux
 (`capture-pane` is the feed). Anything launched outside tmux is invisible
@@ -15,7 +26,7 @@ to the wall.
 
 - Up to **18** concurrent panels (hard ceiling; no soft nudge below that).
 - Adaptive columns: 1 / 2 / 3 / 4 / 6 cols by count.
-- At capacity: 6 columns × 3 rows.
+- At capacity: **6 columns × 3 rows** = 18 panels.
 - Each panel: title + attach dot + last ~10 non-empty pane lines.
 - Left-click → attach in terminal · right-click → kill.
 
@@ -31,6 +42,7 @@ cargo run -- --strip
 git clone https://github.com/VeigaPunk/plazir18.git
 cd plazir18
 cargo build --release --locked
+# crate binary agent-wall → product command plazir18
 install -Dm755 target/release/agent-wall ~/.local/bin/plazir18
 ```
 
